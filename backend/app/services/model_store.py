@@ -147,5 +147,55 @@ class ModelStore:
 
             return EsgEngine.evaluate_model_esg(model, annual_electricity_kwh=annual_kwh)
 
+    @classmethod
+    def get_parametric_baseline(cls, model_id: str) -> Optional[Dict[str, Any]]:
+        with cls._lock:
+            model = cls._models.get(model_id)
+            if not model:
+                return None
+
+            bbox = model.bounding_box
+            width_m = round(bbox.width if bbox else 12.0, 2)
+            length_m = round(bbox.depth if bbox else 16.0, 2)
+            total_height_m = round(bbox.height if bbox else 6.0, 2)
+
+            floors = max(1, len(model.storeys))
+            floor_height_m = round(total_height_m / floors, 2) if floors > 0 else 3.0
+
+            # Count exterior/visible windows
+            window_count = 0
+            for elem in model.elements:
+                if "window" in elem.element_type.lower():
+                    window_count += 1
+            if window_count == 0:
+                window_count = max(4, floors * 8)
+
+            roof_area_m2 = round(width_m * length_m, 2)
+            gross_floor_area_m2 = round(roof_area_m2 * floors, 2)
+            total_wall_area_m2 = round(2 * (width_m + length_m) * total_height_m, 2)
+
+            return {
+                "model_id": model.model_id,
+                "building_id": model.building_id or model.model_id,
+                "building_name": model.building_name or model.project_name or "BIM Digital Twin",
+                "source_type": model.source_type,
+                "source_filename": model.source_filename,
+                "schema_version": model.schema_version,
+                "version": "1.0-baseline",
+                "width_m": width_m,
+                "length_m": length_m,
+                "floor_height_m": floor_height_m,
+                "floors": floors,
+                "window_count": window_count,
+                "roof_area_m2": roof_area_m2,
+                "gross_floor_area_m2": gross_floor_area_m2,
+                "total_wall_area_m2": total_wall_area_m2,
+                "budget_inr": 250000.0,
+                "selected_interventions": ["reflective_roof", "external_shading"],
+                "storeys": [s.model_dump() for s in model.storeys],
+                "element_counts_by_type": model.element_counts_by_type,
+                "materials": list({m for elem in model.elements for m in elem.materials if m}),
+            }
+
 # Preload sample digital twin on module load
 ModelStore.initialize_with_sample_model()

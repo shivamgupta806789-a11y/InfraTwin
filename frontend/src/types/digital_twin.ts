@@ -160,6 +160,22 @@ export interface IntelligenceFinding {
   recommended_action: string;
 }
 
+export interface EvidenceBasedRecommendation {
+  id: string;
+  title: string;
+  category: string;
+  priority: 'high' | 'medium' | 'low';
+  detected_issue: string;
+  explanation: string;
+  supporting_evidence: string;
+  proposed_intervention: string;
+  expected_benefit: string;
+  estimated_cost_inr?: number | null;
+  confidence: 'high' | 'medium' | 'insufficient_data';
+  calculation_method: string;
+  limitations: string;
+}
+
 export interface BuildingIntelligenceReport {
   model_id: string;
   total_elements: number;
@@ -169,5 +185,6 @@ export interface BuildingIntelligenceReport {
   findings_by_severity: Record<string, number>;
   storey_distribution: StoreyDistributionItem[];
   findings: IntelligenceFinding[];
+  recommendations?: EvidenceBasedRecommendation[];
   summary: string;
 }

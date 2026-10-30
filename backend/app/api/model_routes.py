@@ -205,3 +205,17 @@ async def get_model_intelligence(model_id: str):
             detail=f"Model '{model_id}' was not found."
         )
     return report
+
+@router.get("/{model_id}/parametric-baseline")
+async def get_model_parametric_baseline(model_id: str):
+    """
+    Extracts authoritative geometric baseline parameters from the active BIM digital twin
+    to seamlessly initialize Parametric Design and Budget Optimization.
+    """
+    baseline = ModelStore.get_parametric_baseline(model_id)
+    if not baseline:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_id}' was not found."
+        )
+    return baseline

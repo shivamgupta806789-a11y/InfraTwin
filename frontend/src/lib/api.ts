@@ -12,6 +12,21 @@ import {
   EsgAssessmentReport,
   BuildingIntelligenceReport,
 } from '../types/digital_twin';
+import {
+  FloorPlanExtractionResponse,
+  FloorPlan3DGenerateRequest,
+} from '../types/floorplan';
+import {
+  EnvironmentalAnalysisRequest,
+  EnvironmentalAnalysisResponse,
+  LocationPreset,
+  ClimateData,
+} from '../types/environmental';
+import { GeotechnicalSiteProfile } from '../types/geotechnical';
+import { CityModel, CityBuildingSummary } from '../types/city';
+import { SustainabilityAuditReport } from '../types/sustainability';
+import { ScenarioComparisonReport } from '../types/scenarios';
+import { EnergyPredictionResponse, ParetoOptimizationResponse } from '../types/ml_energy';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = 8000;
@@ -215,6 +230,225 @@ export async function fetchModelIntelligenceApi(modelId: string): Promise<Buildi
     throw new ApiError(`Failed to load building intelligence report (${response.status})`, response.status);
   }
   return response.json();
+}
+
+export async function fetchModelParametricBaselineApi(modelId: string): Promise<any> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/models/${encodeURIComponent(modelId)}/parametric-baseline`, {
+    method: 'GET',
+  });
+  if (!response.ok) {
+    throw new ApiError(`Failed to load parametric baseline for model (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+export async function extractFloorplanApi(
+  file: File,
+  knownDimensionM?: number
+): Promise<FloorPlanExtractionResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (knownDimensionM !== undefined && knownDimensionM > 0) {
+    formData.append('known_dimension_m', knownDimensionM.toString());
+  }
+
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 45000); // 45s timeout for CV extraction
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/floorplan/extract`, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const msg = data?.detail || `Floorplan extraction failed with HTTP ${response.status}`;
+      throw new ApiError(msg, response.status);
+    }
+    return data as FloorPlanExtractionResponse;
+  } catch (err: any) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError(err.name === 'AbortError' ? 'Extraction request timed out' : err.message);
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+export async function extractSampleFloorplanApi(
+  sampleName: string = 'commercial'
+): Promise<FloorPlanExtractionResponse> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/floorplan/sample/${sampleName}`, {
+    method: 'POST',
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to extract sample drawing', response.status);
+  }
+  return data as FloorPlanExtractionResponse;
+}
+
+export async function generate3dFromFloorplanApi(
+  req: FloorPlan3DGenerateRequest
+): Promise<ImportSummaryResponse> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/floorplan/generate-3d`, {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to generate 3D building from floorplan', response.status);
+  }
+  return data as ImportSummaryResponse;
+}
+
+export async function analyzeEnvironmentalSuitabilityApi(
+  req: EnvironmentalAnalysisRequest
+): Promise<EnvironmentalAnalysisResponse> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/environmental/analyze`, {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Environmental analysis failed', response.status);
+  }
+  return data as EnvironmentalAnalysisResponse;
+}
+
+export async function searchLocationsApi(
+  query: string
+): Promise<Array<{ display_name: string; latitude: number; longitude: number; city?: string; state?: string; country?: string; type?: string }>> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/environmental/geocode?query=${encodeURIComponent(query)}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Geocoding search failed', response.status);
+  }
+  return data || [];
+}
+
+export async function getLocationPresetsApi(): Promise<LocationPreset[]> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/environmental/presets`, {
+    method: 'GET',
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch location presets', response.status);
+  }
+  return data || [];
+}
+
+export async function getClimateDataApi(
+  latitude: number,
+  longitude: number
+): Promise<ClimateData> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/environmental/climate?latitude=${latitude}&longitude=${longitude}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch climate data', response.status);
+  }
+  return data as ClimateData;
+}
+
+export async function fetchGeotechnicalProfileApi(
+  latitude: number = 28.6139,
+  longitude: number = 77.2090,
+  siteId: string = 'site-001'
+): Promise<GeotechnicalSiteProfile> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/geotechnical/profile?latitude=${latitude}&longitude=${longitude}&site_id=${siteId}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch geotechnical profile', response.status);
+  }
+  return data as GeotechnicalSiteProfile;
+}
+
+export async function fetchCityModelApi(): Promise<CityModel> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/city/model`, { method: 'GET' });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch city-scale model', response.status);
+  }
+  return data as CityModel;
+}
+
+export async function fetchCityBuildingApi(buildingId: string): Promise<CityBuildingSummary> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/city/buildings/${buildingId}`, { method: 'GET' });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || `Failed to fetch building ${buildingId}`, response.status);
+  }
+  return data as CityBuildingSummary;
+}
+
+export async function fetchSustainabilityReportApi(
+  targetEntityId: string = 'sample-office-twin',
+  level: string = 'building',
+  latitude: number = 28.6139,
+  longitude: number = 77.2090
+): Promise<SustainabilityAuditReport> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/sustainability/report?target_entity_id=${targetEntityId}&level=${level}&latitude=${latitude}&longitude=${longitude}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch sustainability intelligence report', response.status);
+  }
+  return data as SustainabilityAuditReport;
+}
+
+export async function fetchScenarioComparisonApi(
+  buildingId: string = 'sample-office-twin',
+  timeHorizon: number = 2026
+): Promise<ScenarioComparisonReport> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/scenarios/compare?building_id=${buildingId}&time_horizon=${timeHorizon}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch scenario comparison', response.status);
+  }
+  return data as ScenarioComparisonReport;
+}
+
+export async function fetchMLEnergyPredictionApi(
+  modelId: string = 'sample-office-twin'
+): Promise<EnergyPredictionResponse> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/ml/energy-prediction?model_id=${modelId}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to compute ML energy predictions', response.status);
+  }
+  return data as EnergyPredictionResponse;
+}
+
+export async function fetchParetoOptimizationApi(
+  budgetInr: number = 500000
+): Promise<ParetoOptimizationResponse> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/ml/pareto-optimization?budget_inr=${budgetInr}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch Pareto optimization alternatives', response.status);
+  }
+  return data as ParetoOptimizationResponse;
 }
 
 export { ApiError, API_BASE_URL };

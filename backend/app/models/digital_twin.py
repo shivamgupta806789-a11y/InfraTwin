@@ -63,6 +63,8 @@ class StoreyInfo(BaseModel):
 
 class BuildingModel(BaseModel):
     model_id: str
+    building_id: Optional[str] = Field(default=None, description="Unique building asset identifier")
+    version: str = Field(default="1.0-baseline", description="Configuration or revision version")
     source_type: str = Field(default="ifc", description="'ifc', 'dxf', or 'sample'")
     source_filename: str
     import_timestamp: str
@@ -175,6 +177,21 @@ class IntelligenceFinding(BaseModel):
     source_properties: Dict[str, Any] = Field(default_factory=dict)
     recommended_action: str
 
+class EvidenceBasedRecommendation(BaseModel):
+    id: str
+    title: str
+    category: str
+    priority: str = Field(..., description="'high', 'medium', or 'low'")
+    detected_issue: str
+    explanation: str
+    supporting_evidence: str
+    proposed_intervention: str
+    expected_benefit: str
+    estimated_cost_inr: Optional[float] = None
+    confidence: str = Field(default="high", description="'high', 'medium', or 'insufficient_data'")
+    calculation_method: str
+    limitations: str
+
 class BuildingIntelligenceReport(BaseModel):
     model_id: str
     total_elements: int
@@ -184,4 +201,5 @@ class BuildingIntelligenceReport(BaseModel):
     findings_by_severity: Dict[str, int] = Field(default_factory=dict)
     storey_distribution: List[StoreyDistributionItem] = Field(default_factory=list)
     findings: List[IntelligenceFinding] = Field(default_factory=list)
+    recommendations: List[EvidenceBasedRecommendation] = Field(default_factory=list)
     summary: str

@@ -5,6 +5,13 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.api.routes import router
 from app.api.model_routes import router as model_router
+from app.api.floorplan_routes import router as floorplan_router
+from app.api.environmental_routes import router as environmental_router
+from app.api.geotechnical_routes import router as geotechnical_router
+from app.api.city_routes import router as city_router
+from app.api.sustainability_routes import router as sustainability_router
+from app.api.scenario_routes import router as scenario_router
+from app.api.ml_routes import router as ml_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -52,3 +59,10 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 app.include_router(router)
 app.include_router(model_router)
+app.include_router(floorplan_router)
+app.include_router(environmental_router)
+app.include_router(geotechnical_router)
+app.include_router(city_router)
+app.include_router(sustainability_router)
+app.include_router(scenario_router)
+app.include_router(ml_router)

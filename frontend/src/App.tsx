@@ -6,6 +6,7 @@ import {
   ApiHealthResponse,
 } from './types/recommendations';
 import {
+  BuildingModel,
   BuildingModelDetail,
   BuildingElement,
   ModelQualityReport,
@@ -17,10 +18,12 @@ import {
   checkApiHealth,
   getRecommendationsApi,
   getEstimateApi,
+  fetchModelsApi,
   fetchModelDetailApi,
   fetchModelQualityApi,
   fetchModelEsgApi,
   fetchModelIntelligenceApi,
+  fetchModelParametricBaselineApi,
   ApiError,
 } from './lib/api';
 import { BuildingForm } from './components/BuildingForm';
@@ -32,10 +35,21 @@ import { ApiStatus } from './components/ApiStatus';
 import { ImpactModal } from './components/ImpactModal';
 import { BuildingViewer } from './components/BuildingViewer';
 import { IfcUploadModal } from './components/IfcUploadModal';
+import { FloorplanUploadModal } from './components/FloorplanUploadModal';
+import { FloorplanCorrectionEditor } from './components/FloorplanCorrectionEditor';
 import { ElementInspector } from './components/ElementInspector';
 import { QualityReportView } from './components/QualityReportView';
 import { EsgDashboardView } from './components/EsgDashboardView';
 import { IntelligenceDashboardView } from './components/IntelligenceDashboardView';
+import { EnvironmentalDashboardView } from './components/EnvironmentalDashboardView';
+import { FloorPlanExtractionResponse } from './types/floorplan';
+import { HomePage } from './components/HomePage';
+import { CityViewer } from './components/CityViewer';
+import { ScenarioIntelligenceView } from './components/ScenarioIntelligenceView';
+import { GeotechnicalIntelligenceView } from './components/GeotechnicalIntelligenceView';
+import { MLEnergyOptimizerView } from './components/MLEnergyOptimizerView';
+import { CityModel } from './types/city';
+import { fetchCityModelApi } from './lib/api';
 import {
   Leaf,
   Scale,
@@ -47,7 +61,22 @@ import {
   Layers,
   Filter,
   Sparkles,
+  FileImage,
+  Globe,
+  Brain,
+  Calendar,
+  Compass,
+  Home as HomeIcon,
 } from 'lucide-react';
+
+export type AppNavigationMode =
+  | 'home'
+  | 'city_twin'
+  | 'digital_twin'
+  | 'parametric'
+  | 'scenarios'
+  | 'geotechnical'
+  | 'ml_optimizer';
 
 const DEFAULT_SAMPLE_BUILDING: BuildingParams = {
   width_m: 12.0,
@@ -60,11 +89,16 @@ const DEFAULT_SAMPLE_BUILDING: BuildingParams = {
 };
 
 export const App: React.FC = () => {
-  // Navigation Mode: 'digital_twin' (Phase 2 IFC BIM Twin) vs 'parametric' (Phase 1 Budget Optimizer)
-  const [activeMode, setActiveMode] = useState<'digital_twin' | 'parametric'>('digital_twin');
+  // Navigation Mode: Unified across Platform Phases 1-8
+  const [activeMode, setActiveMode] = useState<AppNavigationMode>('home');
+
+  // City-scale Digital Twin state (Phase 5)
+  const [cityModel, setCityModel] = useState<CityModel | null>(null);
+  const [isCityLoading, setIsCityLoading] = useState<boolean>(false);
 
   // Digital Twin state
   const [currentModelId, setCurrentModelId] = useState<string>('sample-office-twin');
+  const [availableModels, setAvailableModels] = useState<BuildingModel[]>([]);
   const [importedModel, setImportedModel] = useState<BuildingModelDetail | null>(null);
   const [selectedElement, setSelectedElement] = useState<BuildingElement | null>(null);
   const [qualityReport, setQualityReport] = useState<ModelQualityReport | null>(null);
@@ -73,12 +107,23 @@ export const App: React.FC = () => {
   const [highlightedElementIds, setHighlightedElementIds] = useState<string[]>([]);
   const [highlightSeverity, setHighlightSeverity] = useState<string | null>(null);
   const [isTwinLoading, setIsTwinLoading] = useState<boolean>(false);
-  const [twinTab, setTwinTab] = useState<'3d_twin' | 'intelligence_dashboard' | 'quality_audit' | 'esg_assessment'>('3d_twin');
+  const [twinTab, setTwinTab] = useState<'3d_twin' | 'intelligence_dashboard' | 'quality_audit' | 'esg_assessment' | 'geolocation_climate'>('3d_twin');
 
   // Filter state for Digital Twin 3D view
   const [selectedStoreyId, setSelectedStoreyId] = useState<string | null>(null);
   const [visibleTypes, setVisibleTypes] = useState<string[]>([]);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+
+  // 2D Floor Plan to 3D Generation State
+  const [isFloorplanUploadOpen, setIsFloorplanUploadOpen] = useState<boolean>(false);
+  const [isFloorplanEditorOpen, setIsFloorplanEditorOpen] = useState<boolean>(false);
+  const [floorplanExtraction, setFloorplanExtraction] = useState<FloorPlanExtractionResponse | null>(null);
+  const [floorplanInitialParams, setFloorplanInitialParams] = useState<{
+    floors: number;
+    floorHeight: number;
+    buildingType: string;
+    roofType: 'flat' | 'parapet' | 'gable';
+  } | null>(null);
 
   // Parametric Building inputs state
   const [params, setParams] = useState<BuildingParams>(DEFAULT_SAMPLE_BUILDING);
@@ -130,15 +175,30 @@ export const App: React.FC = () => {
       const types = Object.keys(modelDetail.element_counts_by_type || {});
       setVisibleTypes(types);
 
-      // Fetch Quality, ESG, and Intelligence reports
-      const [qReport, eReport, iReport] = await Promise.all([
+      // Fetch Quality, ESG, Intelligence reports, and Parametric Baseline
+      const [qReport, eReport, iReport, pBaseline, mList] = await Promise.all([
         fetchModelQualityApi(modelId).catch(() => null),
         fetchModelEsgApi(modelId, annualKwh).catch(() => null),
         fetchModelIntelligenceApi(modelId).catch(() => null),
+        fetchModelParametricBaselineApi(modelId).catch(() => null),
+        fetchModelsApi().catch(() => []),
       ]);
       setQualityReport(qReport);
       setEsgReport(eReport);
       setIntelligenceReport(iReport);
+      if (mList && mList.length > 0) {
+        setAvailableModels(mList);
+      }
+      if (pBaseline) {
+        setParams((prev) => ({
+          ...prev,
+          width_m: pBaseline.width_m,
+          length_m: pBaseline.length_m,
+          floor_height_m: pBaseline.floor_height_m,
+          floors: pBaseline.floors,
+          window_count: pBaseline.window_count,
+        }));
+      }
     } catch (err: any) {
       console.warn('Digital twin load notice:', err.message);
     } finally {
@@ -149,8 +209,20 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (apiStatus === 'connected') {
       loadDigitalTwinModel(currentModelId);
+      setIsCityLoading(true);
+      fetchCityModelApi()
+        .then((data) => setCityModel(data))
+        .catch((err) => console.warn('City model fetch notice:', err))
+        .finally(() => setIsCityLoading(false));
     }
   }, [apiStatus, currentModelId, loadDigitalTwinModel]);
+
+  // Drilldown from City Model or Home Page into detailed Building BIM
+  const handleSelectBuildingForBim = (buildingId: string) => {
+    loadDigitalTwinModel(buildingId);
+    setActiveMode('digital_twin');
+    setTwinTab('3d_twin');
+  };
 
   // 3. Fetch recommendations for parametric mode
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -246,8 +318,8 @@ export const App: React.FC = () => {
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-charcoal-200 shadow-2xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-lg bg-emerald-800 text-white flex items-center justify-center shadow-xs">
-              <Leaf className="w-5 h-5 text-emerald-300" />
+            <div className="w-9 h-9 rounded-lg bg-charcoal-900 text-white flex items-center justify-center shadow-xs">
+              <Leaf className="w-5 h-5 text-emerald-400" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
@@ -264,40 +336,44 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center space-x-2.5">
-            {/* Mode Switcher */}
-            <div className="flex items-center bg-stone-100 p-1 rounded-lg border border-charcoal-200 text-xs">
-              <button
-                onClick={() => setActiveMode('digital_twin')}
-                className={`flex items-center space-x-1.5 px-3 py-1 rounded-md font-semibold transition-all ${
-                  activeMode === 'digital_twin'
-                    ? 'bg-emerald-800 text-white shadow-2xs'
-                    : 'text-charcoal-600 hover:text-charcoal-900'
-                }`}
-              >
-                <Boxes className="w-3.5 h-3.5" />
-                <span>BIM Digital Twin</span>
-              </button>
-              <button
-                onClick={() => setActiveMode('parametric')}
-                className={`flex items-center space-x-1.5 px-3 py-1 rounded-md font-semibold transition-all ${
-                  activeMode === 'parametric'
-                    ? 'bg-charcoal-900 text-white shadow-2xs'
-                    : 'text-charcoal-600 hover:text-charcoal-900'
-                }`}
-              >
-                <Building2 className="w-3.5 h-3.5" />
-                <span>Parametric Design</span>
-              </button>
-            </div>
+          <div className="flex items-center space-x-2">
+            {/* Unified Platform Navigation */}
+            <nav className="flex items-center overflow-x-auto bg-stone-100 p-1 rounded-xl border border-charcoal-200 text-xs">
+              {[
+                { id: 'home', label: 'Home', icon: HomeIcon },
+                { id: 'city_twin', label: 'City District', icon: Globe },
+                { id: 'digital_twin', label: 'BIM Twin', icon: Boxes },
+                { id: 'parametric', label: 'Parametric', icon: Building2 },
+                { id: 'scenarios', label: 'Scenarios', icon: Calendar },
+                { id: 'geotechnical', label: 'Subsurface', icon: Compass },
+                { id: 'ml_optimizer', label: 'ML Energy', icon: Brain },
+              ].map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeMode === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveMode(tab.id as AppNavigationMode)}
+                    className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg font-semibold whitespace-nowrap transition-all ${
+                      isActive
+                        ? 'bg-charcoal-900 text-white shadow-2xs'
+                        : 'text-charcoal-600 hover:text-charcoal-900 hover:bg-stone-200/50'
+                    }`}
+                  >
+                    <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-charcoal-500'}`} />
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
 
             {/* Scientific Disclosures Modal Button */}
             <button
               onClick={() => setIsImpactModalOpen(true)}
-              className="flex items-center space-x-1.5 text-xs text-charcoal-700 bg-stone-50 hover:bg-stone-100 border border-charcoal-200 px-3 py-1.5 rounded-lg transition-colors shadow-2xs"
+              className="hidden lg:flex items-center space-x-1.5 text-xs text-charcoal-700 bg-stone-50 hover:bg-stone-100 border border-charcoal-200 px-2.5 py-1.5 rounded-lg transition-colors shadow-2xs"
             >
               <Scale className="w-3.5 h-3.5 text-emerald-700" />
-              <span className="hidden sm:inline">Scientific Honesty</span>
+              <span>Scientific Honesty</span>
             </button>
 
             {/* Backend Connection Indicator */}
@@ -338,7 +414,63 @@ export const App: React.FC = () => {
       {/* Main Content Layout */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 w-full flex-1">
         {/* ========================================================================= */}
-        {/* VIEW 1: BIM DIGITAL TWIN & ESG MODE */}
+        {/* VIEW 0: INTEGRATED APPLICATION HOME PAGE (LANDING HUB) */}
+        {/* ========================================================================= */}
+        {activeMode === 'home' && (
+          <HomePage
+            onNavigate={(view) => setActiveMode(view)}
+            onOpenIfcModal={() => setIsUploadModalOpen(true)}
+            onOpenFloorplanModal={() => setIsFloorplanUploadOpen(true)}
+            activeModel={importedModel}
+            cityModel={cityModel}
+          />
+        )}
+
+        {/* ========================================================================= */}
+        {/* VIEW 1: CITY-SCALE DISTRICT INFRASTRUCTURE TWIN (3D MULTI-BUILDING) */}
+        {/* ========================================================================= */}
+        {activeMode === 'city_twin' && (
+          <div className="space-y-6">
+            <div className="bg-white p-4 rounded-xl border border-charcoal-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 bg-sky-50 text-sky-800 rounded-lg border border-sky-200">
+                  <Globe className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h2 className="text-sm font-bold text-charcoal-900 tracking-tight">
+                      {cityModel?.name || 'TechCity Smart District Masterplan'}
+                    </h2>
+                    <span className="text-[10px] font-mono bg-stone-100 text-stone-700 px-2 py-0.5 rounded border border-stone-200">
+                      WGS84 Coordinates
+                    </span>
+                  </div>
+                  <p className="text-xs text-charcoal-500">
+                    City-scale model • {cityModel?.districts?.length || 2} Districts • {cityModel?.districts?.reduce((acc, d) => acc + (d.total_buildings_count || 0), 0) || 8} Multi-Typology Buildings • 3D Infrastructure Networks
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setActiveMode('digital_twin')}
+                  className="bg-charcoal-900 hover:bg-black text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center space-x-1.5 shadow-2xs cursor-pointer"
+                >
+                  <Boxes className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Open Active BIM Twin</span>
+                </button>
+              </div>
+            </div>
+
+            <CityViewer
+              cityModel={cityModel}
+              isLoading={isCityLoading}
+              onSelectBuildingForBim={handleSelectBuildingForBim}
+            />
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* VIEW 2: BIM DIGITAL TWIN & ESG MODE */}
         {/* ========================================================================= */}
         {activeMode === 'digital_twin' && (
           <div className="space-y-6">
@@ -414,6 +546,17 @@ export const App: React.FC = () => {
                     <Scale className="w-3.5 h-3.5 text-emerald-400" />
                     <span>ESG Screening</span>
                   </button>
+                  <button
+                    onClick={() => setTwinTab('geolocation_climate')}
+                    className={`px-3 py-1 rounded-md font-semibold transition-all flex items-center space-x-1 ${
+                      twinTab === 'geolocation_climate'
+                        ? 'bg-charcoal-900 text-white shadow-2xs'
+                        : 'text-charcoal-600 hover:text-charcoal-900'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Geolocation & Climate</span>
+                  </button>
                 </div>
 
                 <button
@@ -422,6 +565,14 @@ export const App: React.FC = () => {
                 >
                   <Upload className="w-3.5 h-3.5" />
                   <span>Import IFC</span>
+                </button>
+
+                <button
+                  onClick={() => setIsFloorplanUploadOpen(true)}
+                  className="flex items-center space-x-1.5 bg-charcoal-900 hover:bg-charcoal-950 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors shadow-2xs shrink-0"
+                >
+                  <FileImage className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>2D Plan to 3D</span>
                 </button>
               </div>
             </div>
@@ -574,6 +725,11 @@ export const App: React.FC = () => {
                 isLoading={isTwinLoading}
               />
             )}
+
+            {/* Tab Body: Geolocation & Environmental Intelligence */}
+            {twinTab === 'geolocation_climate' && (
+              <EnvironmentalDashboardView modelDetail={importedModel} />
+            )}
           </div>
         )}
 
@@ -584,6 +740,41 @@ export const App: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             {/* Left Column: Input Form, Toggles & Budget Meter (5 Cols) */}
             <div className="lg:col-span-5 space-y-5">
+              {/* Active BIM Baseline Selector Banner */}
+              <div className="bg-white p-3.5 rounded-xl border border-charcoal-200 shadow-2xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Boxes className="w-4 h-4 text-charcoal-900" />
+                    <span className="text-xs font-bold text-charcoal-900">Active BIM Baseline</span>
+                  </div>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    v1.0-baseline
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <select
+                    value={currentModelId}
+                    onChange={(e) => loadDigitalTwinModel(e.target.value)}
+                    className="flex-1 bg-stone-50 border border-charcoal-200 rounded-lg px-2.5 py-1.5 text-xs text-charcoal-800 font-medium focus:outline-none focus:ring-1 focus:ring-charcoal-900"
+                  >
+                    {availableModels.length > 0 ? (
+                      availableModels.map((m) => (
+                        <option key={m.model_id} value={m.model_id}>
+                          {m.building_name || m.project_name || m.model_id} ({m.source_type.toUpperCase()})
+                        </option>
+                      ))
+                    ) : (
+                      <option value={currentModelId}>
+                        {importedModel?.building_name || currentModelId}
+                      </option>
+                    )}
+                  </select>
+                </div>
+                <p className="text-[11px] text-charcoal-500">
+                  Parametric Design automatically consumes this BIM model as its geometric baseline. Design edits create proposed alternative scenarios without altering the original BIM model.
+                </p>
+              </div>
+
               <BuildingForm
                 params={params}
                 errors={formErrors}
@@ -610,6 +801,7 @@ export const App: React.FC = () => {
               <DesignComparison
                 params={params}
                 totalCost={totalSelectedCost}
+                importedModel={importedModel}
               />
 
               <RecommendationList
@@ -620,6 +812,42 @@ export const App: React.FC = () => {
                 isLoading={isLoadingRecommendations}
               />
             </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* VIEW 4: SCENARIO INTELLIGENCE & CLIMATE RESILIENCE (2026-2050) */}
+        {/* ========================================================================= */}
+        {activeMode === 'scenarios' && (
+          <div className="space-y-6">
+            <ScenarioIntelligenceView
+              buildingId={currentModelId}
+            />
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* VIEW 5: GEOTECHNICAL & SUBSURFACE INTELLIGENCE */}
+        {/* ========================================================================= */}
+        {activeMode === 'geotechnical' && (
+          <div className="space-y-6">
+            <GeotechnicalIntelligenceView
+              latitude={28.6139}
+              longitude={77.2090}
+              siteId="site-001"
+            />
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* VIEW 6: ML ENERGY REGRESSION & PARETO OPTIMIZER */}
+        {/* ========================================================================= */}
+        {activeMode === 'ml_optimizer' && (
+          <div className="space-y-6">
+            <MLEnergyOptimizerView
+              modelId={currentModelId}
+              budgetInr={params.budget_inr}
+            />
           </div>
         )}
 
@@ -667,6 +895,40 @@ export const App: React.FC = () => {
           setActiveMode('digital_twin');
         }}
       />
+
+      {/* 2D Floor Plan Ingestion Modal */}
+      <FloorplanUploadModal
+        isOpen={isFloorplanUploadOpen}
+        onClose={() => setIsFloorplanUploadOpen(false)}
+        onExtractionSuccess={(extraction, params) => {
+          setFloorplanExtraction(extraction);
+          setFloorplanInitialParams(params);
+          setIsFloorplanEditorOpen(true);
+        }}
+      />
+
+      {/* 2D Floor Plan Correction & 3D Extrusion Editor */}
+      {floorplanExtraction && (
+        <FloorplanCorrectionEditor
+          isOpen={isFloorplanEditorOpen}
+          onClose={() => {
+            setIsFloorplanEditorOpen(false);
+            setFloorplanExtraction(null);
+          }}
+          floorplan={floorplanExtraction.floorplan}
+          previewOverlayBase64={floorplanExtraction.preview_overlay_base64}
+          summary={floorplanExtraction.summary}
+          initialFloors={floorplanInitialParams?.floors || 2}
+          initialFloorHeight={floorplanInitialParams?.floorHeight || 3.0}
+          initialBuildingType={floorplanInitialParams?.buildingType || 'Commercial'}
+          initialRoofType={floorplanInitialParams?.roofType || 'parapet'}
+          onGenerateSuccess={(newModelId) => {
+            loadDigitalTwinModel(newModelId);
+            setActiveMode('digital_twin');
+            setTwinTab('3d_twin');
+          }}
+        />
+      )}
 
       {/* Disclosures Modal */}
       <ImpactModal

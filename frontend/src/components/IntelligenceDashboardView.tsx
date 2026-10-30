@@ -12,6 +12,9 @@ import {
   Activity,
   PieChart,
   SlidersHorizontal,
+  Award,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 interface IntelligenceDashboardViewProps {
@@ -34,6 +37,7 @@ export const IntelligenceDashboardView: React.FC<IntelligenceDashboardViewProps>
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [expandedRecId, setExpandedRecId] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -287,6 +291,122 @@ export const IntelligenceDashboardView: React.FC<IntelligenceDashboardViewProps>
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Evidence-Based Architectural & Sustainability Recommendations */}
+      <div className="bg-white rounded-xl border border-charcoal-200 p-5 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-charcoal-100 gap-2">
+          <div>
+            <div className="flex items-center space-x-2">
+              <Award className="w-4 h-4 text-emerald-800" />
+              <h3 className="text-sm font-bold text-charcoal-900 tracking-tight">
+                Evidence-Based Architectural & Energy Recommendations
+              </h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                {report.recommendations?.length || 0} Opportunities
+              </span>
+            </div>
+            <p className="text-xs text-charcoal-500 mt-0.5">
+              Derived from BIM envelope geometry, materials, WWR calculations, and documented engineering codes (No fabricated claims).
+            </p>
+          </div>
+        </div>
+
+        {(!report.recommendations || report.recommendations.length === 0) ? (
+          <div className="p-8 text-center text-charcoal-500 text-xs border border-dashed border-charcoal-200 rounded-xl">
+            No recommendations generated. Ensure building geometry and storeys are available in the model.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {report.recommendations.map((rec) => {
+              const isExpanded = expandedRecId === rec.id;
+              return (
+                <div
+                  key={rec.id}
+                  className="p-4 rounded-xl border border-charcoal-200 hover:border-emerald-300 transition-all bg-white space-y-3 shadow-2xs"
+                >
+                  <div
+                    onClick={() => setExpandedRecId(isExpanded ? null : rec.id)}
+                    className="flex items-start justify-between cursor-pointer gap-3"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <span
+                          className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${
+                            rec.priority === 'high'
+                              ? 'bg-rose-50 text-rose-800 border-rose-200'
+                              : rec.priority === 'medium'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : 'bg-stone-50 text-stone-700 border-stone-200'
+                          }`}
+                        >
+                          {rec.priority} Priority
+                        </span>
+                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-stone-100 text-charcoal-600 border border-stone-200">
+                          {rec.category.replace('_', ' ')}
+                        </span>
+                        <h4 className="text-xs font-bold text-charcoal-900">{rec.title}</h4>
+                      </div>
+                      <p className="text-xs text-charcoal-700 leading-relaxed">{rec.detected_issue}</p>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="p-1 text-charcoal-400 hover:text-charcoal-700 rounded transition-colors shrink-0"
+                    >
+                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {/* Expanded Engineering Evidence & Benefit */}
+                  {isExpanded && (
+                    <div className="pt-3 border-t border-charcoal-100 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div className="p-3 bg-stone-50 rounded-lg space-y-1 border border-charcoal-100">
+                        <span className="text-[10px] uppercase font-bold text-charcoal-500 tracking-wider">
+                          Supporting BIM Evidence
+                        </span>
+                        <p className="text-charcoal-800 text-[11px] leading-relaxed">
+                          {rec.supporting_evidence}
+                        </p>
+                      </div>
+
+                      <div className="p-3 bg-emerald-50/50 rounded-lg space-y-1 border border-emerald-100">
+                        <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">
+                          Proposed Intervention & Benefit
+                        </span>
+                        <p className="text-charcoal-800 text-[11px] leading-relaxed">
+                          {rec.proposed_intervention} — <strong>{rec.expected_benefit}</strong>
+                        </p>
+                      </div>
+
+                      <div className="p-3 bg-stone-50 rounded-lg space-y-1 border border-charcoal-100">
+                        <span className="text-[10px] uppercase font-bold text-charcoal-500 tracking-wider">
+                          Cost Estimate & Calculation Method
+                        </span>
+                        <p className="text-charcoal-900 font-mono text-[11px] font-semibold">
+                          {rec.estimated_cost_inr ? `Approx ₹${rec.estimated_cost_inr.toLocaleString()}` : 'Custom Quotation'}
+                        </p>
+                        <p className="text-charcoal-500 text-[10px]">
+                          Method: {rec.calculation_method}
+                        </p>
+                      </div>
+
+                      <div className="p-3 bg-amber-50/50 rounded-lg space-y-1 border border-amber-200">
+                        <span className="text-[10px] uppercase font-bold text-amber-800 tracking-wider flex items-center space-x-1">
+                          <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          <span>Engineering Limitations</span>
+                        </span>
+                        <p className="text-charcoal-700 text-[11px] leading-relaxed">
+                          {rec.limitations}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Issue Detection and Risk Analysis Section */}
