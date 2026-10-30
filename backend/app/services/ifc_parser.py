@@ -377,6 +377,69 @@ class IfcParserService:
                 except Exception:
                     pass
 
+                # Determine structural role, load-bearing status, material grade, and fire rating
+                is_load_bearing: Optional[bool] = None
+                structural_role: str = "unspecified"
+                mat_grade: Optional[str] = None
+                fire_rating: Optional[str] = None
+
+                # Check property sets
+                for pset_name, pset_data in source_properties.items():
+                    if isinstance(pset_data, dict):
+                        if "LoadBearing" in pset_data:
+                            val = pset_data["LoadBearing"]
+                            if isinstance(val, bool):
+                                is_load_bearing = val
+                            elif str(val).lower() in ["true", "1", "yes"]:
+                                is_load_bearing = True
+                            elif str(val).lower() in ["false", "0", "no"]:
+                                is_load_bearing = False
+                        if "FireRating" in pset_data:
+                            fire_rating = str(pset_data["FireRating"])
+                        if "StrengthClass" in pset_data:
+                            mat_grade = str(pset_data["StrengthClass"])
+
+                # Classify structural role based on IFC entity type and load bearing status
+                if elem_type in ["IfcColumn", "IfcBeam"]:
+                    structural_role = "structural_framing"
+                    if is_load_bearing is None:
+                        is_load_bearing = True
+                elif elem_type == "IfcFooting":
+                    structural_role = "load_bearing"
+                    is_load_bearing = True
+                elif elem_type in ["IfcWall", "IfcWallStandardCase"]:
+                    if is_load_bearing is True:
+                        structural_role = "load_bearing"
+                    elif is_load_bearing is False:
+                        structural_role = "non_load_bearing_partition"
+                    else:
+                        thick = quantities.get("thickness", quantities.get("bbox_width_m", 0.2))
+                        if thick >= 0.20:
+                            structural_role = "load_bearing"
+                            is_load_bearing = True
+                        else:
+                            structural_role = "non_load_bearing_partition"
+                            is_load_bearing = False
+                elif elem_type == "IfcSlab":
+                    structural_role = "load_bearing"
+                    if is_load_bearing is None:
+                        is_load_bearing = True
+                elif elem_type in ["IfcDoor", "IfcWindow"]:
+                    structural_role = "aperture"
+                    is_load_bearing = False
+                elif elem_type == "IfcSpace":
+                    structural_role = "spatial_volume"
+                    is_load_bearing = False
+
+                # Search materials for grade
+                if not mat_grade and materials_list:
+                    for m in materials_list:
+                        m_upper = m.upper()
+                        for g in ["C20/25", "C25/30", "C30/37", "C35/45", "C40/50", "M20", "M25", "M30", "M35", "M40", "S275", "S355"]:
+                            if g in m_upper:
+                                mat_grade = g
+                                break
+
                 # Assemble element relationships
                 elem_relationships = {
                     "hosted_in": door_window_to_wall.get(global_id),
@@ -406,6 +469,10 @@ class IfcParserService:
                         "parser_version": ifcopenshell.__version__,
                         "extraction_mode": "native_step"
                     },
+                    structural_role=structural_role,
+                    is_load_bearing=is_load_bearing,
+                    structural_material_grade=mat_grade,
+                    fire_rating=fire_rating,
                     confidence_status=confidence
                 )
                 extracted_elements.append(b_element)
@@ -431,6 +498,28 @@ class IfcParserService:
         if not extracted_elements:
             missing_info.append("No supported building elements (walls, slabs, columns, beams, windows, doors) found in IFC file.")
 
+        # Check for structural analytical models
+        has_structural_model = len(ifc_file.by_type("IfcStructuralItem")) > 0 or len(ifc_file.by_type("IfcStructuralAnalysisModel")) > 0
+        if not has_structural_model:
+            missing_info.append("No structural analytical model (IfcStructuralAnalysisModel) detected; model represents visual architectural geometry only.")
+
+        structural_audit = {
+            "has_structural_analytical_model": has_structural_model,
+            "total_structural_elements": sum(1 for e in extracted_elements if e.is_load_bearing),
+            "total_partitions": sum(1 for e in extracted_elements if e.structural_role == "non_load_bearing_partition"),
+            "columns_count": element_counts.get("IfcColumn", 0),
+            "beams_count": element_counts.get("IfcBeam", 0),
+            "slabs_count": element_counts.get("IfcSlab", 0),
+            "load_bearing_walls_count": sum(1 for e in extracted_elements if e.element_type in ["IfcWall", "IfcWallStandardCase"] and e.is_load_bearing),
+            "missing_structural_documentation": [
+                "Bar Bending Schedule (BBS) & Structural Reinforcement Detailing",
+                "Concrete Compressive Strength Test Logs (IS 456 / EN 206)",
+                "3D Finite Element Structural Calculation & Load Path Report",
+                "Geotechnical Soil-Structure Interaction & Foundation Settlement Analysis"
+            ],
+            "engineering_disclaimer": "Visual 3D BIM geometry represents spatial envelope and physical dimensions only. It does not constitute a structural engineering model or verify load capacity, wind shear resistance, or seismic adequacy. Independent structural engineering analysis by a licensed professional is mandatory."
+        }
+
         model = BuildingModelDetail(
             model_id=model_id,
             source_type="ifc",
@@ -446,6 +535,7 @@ class IfcParserService:
             total_element_count=len(extracted_elements),
             available_properties=sorted(list(all_prop_names)),
             missing_data=missing_info,
+            structural_audit=structural_audit,
             bounding_box=model_bbox,
             provenance_metadata={
                 "parser": "IfcOpenShell",

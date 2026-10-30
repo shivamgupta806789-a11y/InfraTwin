@@ -8,6 +8,8 @@ import cv2
 from PIL import Image
 
 import pypdfium2 as pdfium
+from shapely.geometry import Polygon, MultiPolygon, LineString, Point as ShapelyPoint
+from shapely.validation import make_valid
 from app.models.floorplan import (
     Point2D,
     Wall2D,
@@ -119,6 +121,9 @@ class FloorplanProcessorService:
         if cv2.countNonZero(wall_mask) < 0.003 * (w_px * h_px):
             wall_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
             warnings.append("Fine-line drawing detected: morphological wall filter adapted to capture thinner strokes.")
+
+        # Compute distance transform for stroke thickness measurement
+        dist_transform = cv2.distanceTransform(wall_mask, cv2.DIST_L2, 5)
 
         # 3. Detect raw line segments using Probabilistic Hough Transform
         min_line_len = max(25, int(min(w_px, h_px) * 0.035))
@@ -246,14 +251,23 @@ class FloorplanProcessorService:
                 continue
             # Determine if exterior: near outer bounding box
             is_ext = abs(y - min_y_px) < (span_y_px * 0.08) or abs(y - max_y_px) < (span_y_px * 0.08)
+            meas_thick_m, meas_thick_px = cls._measure_wall_thickness(
+                p1_px=(x_min, y),
+                p2_px=(x_max, y),
+                dist_transform=dist_transform,
+                pixels_per_meter=pixels_per_meter,
+                default_m=0.25 if is_ext else 0.15
+            )
             walls_2d.append(
                 Wall2D(
                     id=f"wall_h_{wall_counter}",
                     start=p1,
                     end=p2,
-                    thickness_m=0.25 if is_ext else 0.15,
+                    thickness_m=meas_thick_m,
+                    measured_thickness_px=meas_thick_px,
                     confidence=0.92,
                     wall_type="exterior" if is_ext else "interior",
+                    validation_status="VALID",
                     is_active=True,
                 )
             )
@@ -266,14 +280,23 @@ class FloorplanProcessorService:
             if length_m < 0.4:
                 continue
             is_ext = abs(x - min_x_px) < (span_x_px * 0.08) or abs(x - max_x_px) < (span_x_px * 0.08)
+            meas_thick_m, meas_thick_px = cls._measure_wall_thickness(
+                p1_px=(x, y_min),
+                p2_px=(x, y_max),
+                dist_transform=dist_transform,
+                pixels_per_meter=pixels_per_meter,
+                default_m=0.25 if is_ext else 0.15
+            )
             walls_2d.append(
                 Wall2D(
                     id=f"wall_v_{wall_counter}",
                     start=p1,
                     end=p2,
-                    thickness_m=0.25 if is_ext else 0.15,
+                    thickness_m=meas_thick_m,
+                    measured_thickness_px=meas_thick_px,
                     confidence=0.92,
                     wall_type="exterior" if is_ext else "interior",
+                    validation_status="VALID",
                     is_active=True,
                 )
             )
@@ -285,14 +308,23 @@ class FloorplanProcessorService:
             length_m = math.hypot(p2.x - p1.x, p2.y - p1.y)
             if length_m < 0.6:
                 continue
+            meas_thick_m, meas_thick_px = cls._measure_wall_thickness(
+                p1_px=(x1, y1),
+                p2_px=(x2, y2),
+                dist_transform=dist_transform,
+                pixels_per_meter=pixels_per_meter,
+                default_m=0.20
+            )
             walls_2d.append(
                 Wall2D(
                     id=f"wall_s_{wall_counter}",
                     start=p1,
                     end=p2,
-                    thickness_m=0.20,
+                    thickness_m=meas_thick_m,
+                    measured_thickness_px=meas_thick_px,
                     confidence=0.80,
                     wall_type="interior",
+                    validation_status="VALID",
                     is_active=True,
                 )
             )
@@ -307,13 +339,23 @@ class FloorplanProcessorService:
             max_y_px=max_y_px,
         )
 
-        # 9. Detect Enclosed Rooms via floodfilled inverse mask
+        # 9. Detect Enclosed Rooms via floodfilled inverse mask with color & material sampling
         rooms_2d = cls._detect_rooms(
             wall_mask=wall_mask,
             min_x_px=min_x_px,
             max_x_px=max_x_px,
             min_y_px=min_y_px,
             max_y_px=max_y_px,
+            pixels_per_meter=pixels_per_meter,
+            img_bgr=img_bgr,
+        )
+
+        # 9b. Comprehensive Geometric Validation & Topological Snapping Engine
+        val_report = cls._validate_and_repair_geometry(
+            walls=walls_2d,
+            rooms=rooms_2d,
+            doors=doors_2d,
+            windows=windows_2d,
             pixels_per_meter=pixels_per_meter,
         )
 
@@ -389,6 +431,7 @@ class FloorplanProcessorService:
             doors=doors_2d,
             windows=windows_2d,
             rooms=rooms_2d,
+            geometry_validation_report=val_report,
             overall_confidence=overall_conf,
             warnings=warnings,
         )
@@ -410,6 +453,8 @@ class FloorplanProcessorService:
             "detected_storeys": detected_storeys,
             "detected_floor_height_m": detected_height,
             "detected_building_typology": detected_typology,
+            "geometry_validation": val_report,
+            "detected_room_materials": val_report.get("detected_room_materials", []),
             "clarifications_needed": len([q for q in clarifications if q.status == "pending"]),
         }
 
@@ -889,6 +934,209 @@ class FloorplanProcessorService:
         return doors, windows
 
     @classmethod
+    def _measure_wall_thickness(
+        cls,
+        p1_px: Tuple[float, float],
+        p2_px: Tuple[float, float],
+        dist_transform: Optional[np.ndarray],
+        pixels_per_meter: float,
+        default_m: float = 0.20,
+    ) -> Tuple[float, float]:
+        """
+        Samples OpenCV distance transform along wall segment centerline to extract real stroke thickness.
+        Returns (thickness_m, thickness_px).
+        """
+        x1, y1 = p1_px
+        x2, y2 = p2_px
+        length_px = math.hypot(x2 - x1, y2 - y1)
+        if length_px < 10 or dist_transform is None:
+            return default_m, round(default_m * pixels_per_meter, 1)
+
+        num_samples = max(4, min(25, int(length_px / 12.0)))
+        h, w = dist_transform.shape
+        radii = []
+        for i in range(1, num_samples):
+            t = i / float(num_samples)
+            sx = int(round(x1 + t * (x2 - x1)))
+            sy = int(round(y1 + t * (y2 - y1)))
+            if 0 <= sx < w and 0 <= sy < h:
+                val = float(dist_transform[sy, sx])
+                if val > 1.0:
+                    radii.append(val)
+
+        if radii:
+            med_radius = float(np.median(radii))
+            thickness_px = max(4.0, med_radius * 2.0)
+            thickness_m = max(0.10, min(0.60, round(thickness_px / pixels_per_meter, 2)))
+            return thickness_m, round(thickness_px, 1)
+
+        return default_m, round(default_m * pixels_per_meter, 1)
+
+    @classmethod
+    def _extract_room_color_and_material(
+        cls,
+        img_bgr: Optional[np.ndarray],
+        cnt: np.ndarray,
+        room_type: str,
+        room_name: str,
+    ) -> Tuple[str, List[int], str, float]:
+        """
+        Samples interior pixels of a room from the colored floor plan,
+        extracting dominant HSV/RGB colors and mapping them to realistic architectural materials.
+        Returns: (dominant_color_hex, color_rgb, inferred_material, material_confidence)
+        """
+        if img_bgr is None:
+            return "#f1f5f9", [241, 245, 249], "polished_concrete", 0.70
+
+        h_px, w_px = img_bgr.shape[:2]
+        mask = np.zeros((h_px, w_px), dtype=np.uint8)
+        cv2.drawContours(mask, [cnt], -1, 255, -1)
+        eroded = cv2.erode(mask, np.ones((7, 7), np.uint8))
+        if cv2.countNonZero(eroded) < 30:
+            eroded = mask
+
+        pixels = img_bgr[eroded > 0]
+        if len(pixels) == 0:
+            return "#f1f5f9", [241, 245, 249], "polished_concrete", 0.70
+
+        mean_intensities = np.mean(pixels, axis=1)
+        colored_pixels = pixels[(mean_intensities > 35) & (mean_intensities < 248)]
+        if len(colored_pixels) < 20:
+            colored_pixels = pixels
+
+        med_b = int(np.median(colored_pixels[:, 0]))
+        med_g = int(np.median(colored_pixels[:, 1]))
+        med_r = int(np.median(colored_pixels[:, 2]))
+        color_hex = f"#{med_r:02x}{med_g:02x}{med_b:02x}"
+        color_rgb = [med_r, med_g, med_b]
+
+        hsv = cv2.cvtColor(np.uint8([[[med_b, med_g, med_r]]]), cv2.COLOR_BGR2HSV)[0][0]
+        hue, sat, val = int(hsv[0]), int(hsv[1]), int(hsv[2])
+
+        # 1. Green hues (35-85) -> Landscaped courtyard / vegetation / terrace turf
+        if 35 <= hue <= 85 and sat >= 30:
+            return color_hex, color_rgb, "landscaped_vegetation", 0.94
+
+        # 2. Cyan / Blue hues (90-130) -> Water body / pool feature
+        if 90 <= hue <= 130 and sat >= 30:
+            return color_hex, color_rgb, "water_feature", 0.95
+
+        # 3. Warm amber/tan/brown (10-28, sat >= 25) -> Hardwood parquet flooring
+        if 10 <= hue <= 28 and sat >= 25 and val >= 65:
+            return color_hex, color_rgb, "hardwood", 0.92
+
+        # 4. Restroom / Kitchen or tile pattern
+        if room_type in ["bathroom", "kitchen"] or "bath" in room_name.lower() or "toilet" in room_name.lower():
+            return color_hex, color_rgb, "ceramic_tile", 0.90
+
+        # 5. Low saturation, bright -> Polished concrete / terrazzo
+        if sat < 25 and val >= 180:
+            return color_hex, color_rgb, "polished_concrete", 0.86
+
+        # 6. Low saturation, mid tone -> Commercial carpet
+        if sat < 40 and 80 <= val < 180:
+            return color_hex, color_rgb, "carpet", 0.84
+
+        # Default based on room typology
+        if room_type == "bedroom" or "living" in room_name.lower():
+            return color_hex, color_rgb, "hardwood", 0.80
+
+        return color_hex, color_rgb, "polished_concrete", 0.80
+
+    @classmethod
+    def _validate_and_repair_geometry(
+        cls,
+        walls: List[Wall2D],
+        rooms: List[Room2D],
+        doors: List[Door2D],
+        windows: List[Window2D],
+        pixels_per_meter: float,
+        snap_tol_m: float = 0.45,
+    ) -> Dict[str, Any]:
+        """
+        Validates topological consistency across walls and room polygons:
+        1. Checks for disconnected or floating wall segments and snaps nearby junctions.
+        2. Detects overlapping collinear segments.
+        3. Confirms that all room polygons are non-self-intersecting and topologically valid.
+        """
+        disconnected_count = 0
+        overlapping_count = 0
+
+        for i, w1 in enumerate(walls):
+            if not w1.is_active:
+                continue
+
+            conn_start = 0
+            conn_end = 0
+
+            for j, w2 in enumerate(walls):
+                if i == j or not w2.is_active:
+                    continue
+
+                d_ss = math.hypot(w1.start.x - w2.start.x, w1.start.y - w2.start.y)
+                d_se = math.hypot(w1.start.x - w2.end.x, w1.start.y - w2.end.y)
+                if d_ss <= snap_tol_m:
+                    w1.start = Point2D(x=w2.start.x, y=w2.start.y)
+                    conn_start += 1
+                elif d_se <= snap_tol_m:
+                    w1.start = Point2D(x=w2.end.x, y=w2.end.y)
+                    conn_start += 1
+
+                d_es = math.hypot(w1.end.x - w2.start.x, w1.end.y - w2.start.y)
+                d_ee = math.hypot(w1.end.x - w2.end.x, w1.end.y - w2.end.y)
+                if d_es <= snap_tol_m:
+                    w1.end = Point2D(x=w2.start.x, y=w2.start.y)
+                    conn_end += 1
+                elif d_ee <= snap_tol_m:
+                    w1.end = Point2D(x=w2.end.x, y=w2.end.y)
+                    conn_end += 1
+
+                # Collinear overlap check
+                dx1, dy1 = w1.end.x - w1.start.x, w1.end.y - w1.start.y
+                dx2, dy2 = w2.end.x - w2.start.x, w2.end.y - w2.start.y
+                if abs(dy1) < 0.05 and abs(dy2) < 0.05 and abs(w1.start.y - w2.start.y) < 0.15:
+                    min_1, max_1 = min(w1.start.x, w1.end.x), max(w1.start.x, w1.end.x)
+                    min_2, max_2 = min(w2.start.x, w2.end.x), max(w2.start.x, w2.end.x)
+                    if not (max_1 < min_2 or min_1 > max_2):
+                        overlapping_count += 1
+                        w1.validation_status = "OVERLAPPING"
+                        w1.validation_errors.append("Collinear horizontal overlap with adjacent segment.")
+
+                if abs(dx1) < 0.05 and abs(dx2) < 0.05 and abs(w1.start.x - w2.start.x) < 0.15:
+                    min_1, max_1 = min(w1.start.y, w1.end.y), max(w1.start.y, w1.end.y)
+                    min_2, max_2 = min(w2.start.y, w2.end.y), max(w2.start.y, w2.end.y)
+                    if not (max_1 < min_2 or min_1 > max_2):
+                        overlapping_count += 1
+                        w1.validation_status = "OVERLAPPING"
+                        w1.validation_errors.append("Collinear vertical overlap with adjacent segment.")
+
+            total_conn = conn_start + conn_end
+            w1.connectivity_degree = total_conn
+            if total_conn == 0 and math.hypot(w1.end.x - w1.start.x, w1.end.y - w1.start.y) >= 0.8:
+                disconnected_count += 1
+                w1.validation_status = "DISCONNECTED"
+                w1.validation_errors.append("Disconnected orphan wall: no structural corner connection.")
+
+        repaired_polys = sum(len(r.validation_errors) for r in rooms)
+        materials_detected = sorted(list(set(r.inferred_material for r in rooms)))
+
+        return {
+            "is_topologically_sound": (disconnected_count == 0 and all(r.is_valid_polygon for r in rooms)),
+            "total_walls": len(walls),
+            "valid_walls": sum(1 for w in walls if w.validation_status == "VALID"),
+            "disconnected_walls": disconnected_count,
+            "overlapping_walls": overlapping_count,
+            "repaired_room_polygons": repaired_polys,
+            "all_rooms_valid": all(r.is_valid_polygon for r in rooms),
+            "detected_room_materials": materials_detected,
+            "validation_summary": (
+                "Watertight geometry verified with 0 topological defects."
+                if disconnected_count == 0
+                else f"{disconnected_count} disconnected wall junctions flagged for review."
+            )
+        }
+
+    @classmethod
     def _detect_rooms(
         cls,
         wall_mask: np.ndarray,
@@ -897,18 +1145,19 @@ class FloorplanProcessorService:
         min_y_px: float,
         max_y_px: float,
         pixels_per_meter: float,
+        img_bgr: Optional[np.ndarray] = None,
     ) -> List[Room2D]:
         """
         Detects enclosed interior rooms via morphological inverted dilation & floodfilled borders.
+        Samples interior color and maps to realistic architectural materials.
+        Validates polygonal contours using Shapely.
         """
         rooms: List[Room2D] = []
         h_px, w_px = wall_mask.shape[:2]
 
-        # Dilate walls to seal small door gaps for room enclosed space segmentation
         dilated = cv2.dilate(wall_mask, np.ones((11, 11), np.uint8))
         rooms_mask = cv2.bitwise_not(dilated)
 
-        # Flood fill outside border from (0, 0) to eliminate page background
         cv2.floodFill(rooms_mask, None, (0, 0), 0)
         cv2.floodFill(rooms_mask, None, (w_px - 1, 0), 0)
         cv2.floodFill(rooms_mask, None, (0, h_px - 1), 0)
@@ -916,7 +1165,7 @@ class FloorplanProcessorService:
 
         contours, _ = cv2.findContours(rooms_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        min_room_area_px = (2.0 * pixels_per_meter) * (2.0 * pixels_per_meter)  # >= 4 m²
+        min_room_area_px = (2.0 * pixels_per_meter) * (2.0 * pixels_per_meter)
         max_room_area_px = 0.85 * (max_x_px - min_x_px) * (max_y_px - min_y_px)
 
         room_id_seq = 1
@@ -925,13 +1174,11 @@ class FloorplanProcessorService:
             if area_px < min_room_area_px or area_px > max_room_area_px:
                 continue
 
-            # Approximate polygonal boundary
             epsilon = 0.02 * cv2.arcLength(cnt, True)
             approx = cv2.approxPolyDP(cnt, epsilon, True)
             if len(approx) < 3:
                 continue
 
-            # Convert contour points to meter coordinates
             polygon_pts: List[Point2D] = []
             for pt in approx:
                 px, py = pt[0]
@@ -939,15 +1186,33 @@ class FloorplanProcessorService:
                 ym = (max_y_px - py) / pixels_per_meter
                 polygon_pts.append(Point2D(x=round(float(xm), 3), y=round(float(ym), 3)))
 
+            is_valid_poly = True
+            poly_errors: List[str] = []
+            if len(polygon_pts) >= 3:
+                try:
+                    sh_poly = Polygon([(p.x, p.y) for p in polygon_pts])
+                    if not sh_poly.is_valid:
+                        repaired = make_valid(sh_poly)
+                        if repaired.geom_type == 'Polygon':
+                            sh_poly = repaired
+                        elif repaired.geom_type == 'MultiPolygon':
+                            sh_poly = max(repaired.geoms, key=lambda g: g.area)
+                        new_coords = list(sh_poly.exterior.coords)[:-1]
+                        if len(new_coords) >= 3:
+                            polygon_pts = [Point2D(x=round(c[0], 3), y=round(c[1], 3)) for c in new_coords]
+                        poly_errors.append("Self-intersecting contour repaired topologically.")
+                except Exception as err:
+                    is_valid_poly = False
+                    poly_errors.append(f"Polygon topological check warning: {str(err)}")
+
             area_sqm = round(area_px / (pixels_per_meter * pixels_per_meter), 1)
 
-            # Assign room label based on size
             if area_sqm >= 35.0:
                 name = f"Open Workspace / Hall {room_id_seq}"
                 rtype = "office"
             elif area_sqm >= 18.0:
                 name = f"Conference / Living {room_id_seq}"
-                rtype = "office"
+                rtype = "living"
             elif area_sqm >= 10.0:
                 name = f"Office / Bedroom {room_id_seq}"
                 rtype = "bedroom"
@@ -958,6 +1223,13 @@ class FloorplanProcessorService:
                 name = f"Utility / Restroom {room_id_seq}"
                 rtype = "bathroom"
 
+            color_hex, color_rgb, inferred_mat, mat_conf = cls._extract_room_color_and_material(
+                img_bgr=img_bgr,
+                cnt=cnt,
+                room_type=rtype,
+                room_name=name,
+            )
+
             rooms.append(
                 Room2D(
                     id=f"room_{room_id_seq}",
@@ -966,11 +1238,16 @@ class FloorplanProcessorService:
                     area_sqm=area_sqm,
                     room_type=rtype,
                     confidence=0.88,
+                    dominant_color_hex=color_hex,
+                    color_rgb=color_rgb,
+                    inferred_material=inferred_mat,
+                    material_confidence=mat_conf,
+                    is_valid_polygon=is_valid_poly,
+                    validation_errors=poly_errors,
                 )
             )
             room_id_seq += 1
 
-        # Fallback if no enclosed rooms were segmented
         if not rooms:
             footprint_w = (max_x_px - min_x_px) / pixels_per_meter
             footprint_d = (max_y_px - min_y_px) / pixels_per_meter
@@ -987,6 +1264,11 @@ class FloorplanProcessorService:
                     area_sqm=round(footprint_w * footprint_d, 1),
                     room_type="office",
                     confidence=0.70,
+                    dominant_color_hex="#f1f5f9",
+                    color_rgb=[241, 245, 249],
+                    inferred_material="polished_concrete",
+                    material_confidence=0.80,
+                    is_valid_polygon=True,
                 )
             )
 

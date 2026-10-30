@@ -1,9 +1,13 @@
 import datetime
+import math
 from typing import List, Dict, Any, Optional
 from app.models.sustainability import ComprehensiveRecommendation, SustainabilityAuditReport
+from app.models.environmental import GeoLocation
 from app.services.model_store import ModelStore
 from app.services.geotechnical_service import GeotechnicalService
 from app.services.city_service import CityService
+from app.services.environmental_service import EnvironmentalService
+from app.services.environmental_protection_service import EnvironmentalProtectionEngine
 
 
 class SustainabilityRecommendationService:
@@ -92,6 +96,57 @@ class SustainabilityRecommendationService:
                 )
             )
 
+        # ---------------------------------------------------------------------
+        # Mandatory Ecological Protection Constraints (No-Net-Tree-Loss, Riparian, Drainage, Topography)
+        # ---------------------------------------------------------------------
+        try:
+            loc = GeoLocation(latitude=latitude, longitude=longitude)
+            climate = EnvironmentalService.get_climate_data(latitude, longitude)
+            site_ctx = EnvironmentalService.get_site_context(latitude, longitude)
+
+            footprint_w = math.sqrt(roof_area) if roof_area > 0 else 16.0
+            footprint_d = math.sqrt(roof_area) if roof_area > 0 else 16.0
+
+            prot_constraints = EnvironmentalProtectionEngine.evaluate_protection_constraints(
+                location=loc,
+                site_context=site_ctx,
+                climate=climate,
+                building_footprint_w_m=footprint_w,
+                building_footprint_d_m=footprint_d
+            )
+
+            for c in prot_constraints:
+                alts_text = " | ".join([
+                    f"Option {i+1} ({alt.name}): {alt.description} [Delta: ₹{alt.capital_cost_delta_inr:,.0f}, Benefit: {alt.environmental_benefit}]"
+                    for i, alt in enumerate(c.proposed_alternatives)
+                ])
+                min_cost = min([a.capital_cost_delta_inr for a in c.proposed_alternatives], default=40000.0)
+                recs.append(
+                    ComprehensiveRecommendation(
+                        id=f"REC-{c.constraint_id}",
+                        category="environmental_sustainability",
+                        category_title="A. Environmental Sustainability & Ecological Protection",
+                        hierarchical_level="site",
+                        target_entity_id=target_entity_id,
+                        priority="critical" if "critical" in c.severity else "high",
+                        title=f"Ecological Protection Mandate: {c.title}",
+                        detected_condition=c.detected_problem,
+                        evidence=c.supporting_evidence,
+                        explanation=f"{c.why_it_matters} Mandatory Rule: {c.mandatory_rule}",
+                        proposed_intervention=f"Adopt certified ecological alternatives rather than environmental destruction: {alts_text}",
+                        expected_benefit="Guarantees non-destructive ecological compliance, eliminates environmental clearance penalties, and preserves natural site capital.",
+                        estimated_cost_inr=float(min_cost),
+                        time_horizon="immediate",
+                        confidence=c.confidence,
+                        data_sources=c.data_sources,
+                        assumptions=c.assumptions,
+                        missing_information=c.missing_information,
+                        validation_requirements=c.validation_requirements
+                    )
+                )
+        except Exception as e:
+            insufficient_data.append(f"Environmental protection evaluation note: {str(e)}")
+
         # =========================================================================
         # CATEGORY B: GEOTECHNICAL AND SITE SUITABILITY
         # =========================================================================
@@ -145,6 +200,42 @@ class SustainabilityRecommendationService:
                 validation_requirements="Nonlinear response spectrum analysis validated by certified peer structural reviewer."
             )
         )
+
+        # 5. Building Level: Structural Engineering Peer Review & Missing Documentation
+        model_detail = ModelStore.get_model(target_entity_id)
+        structural_audit = model_detail.structural_audit if model_detail else None
+
+        if structural_audit:
+            missing_docs = structural_audit.get("missing_engineering_documentation", [])
+            disclaimer = structural_audit.get("design_safety_disclaimer", "")
+            load_bearing = structural_audit.get("load_bearing_elements_count", 0)
+            partitions = structural_audit.get("partition_elements_count", 0)
+            sys_type = structural_audit.get("structural_system_classification", "Unclassified")
+
+            if missing_docs:
+                recs.append(
+                    ComprehensiveRecommendation(
+                        id="REC-STR-001",
+                        category="geotechnical_suitability",
+                        category_title="B. Geotechnical & Structural Integrity",
+                        hierarchical_level="building",
+                        target_entity_id=target_entity_id,
+                        priority="critical",
+                        title=f"Structural Engineering Peer Review & Missing Documentation ({len(missing_docs)} Items Required)",
+                        detected_condition=f"Digital twin contains {load_bearing} load-bearing structural elements and {partitions} partitions ({sys_type}). However, {len(missing_docs)} statutory engineering compliance items are absent.",
+                        evidence=f"Missing verification items: {'; '.join(missing_docs[:4])}.",
+                        explanation=disclaimer or "3D visual BIM geometry is not an engineered structural safety model. Commencing construction without verified structural calculations, rebar bar bending schedules, and concrete cube test records creates catastrophic collapse liabilities.",
+                        proposed_intervention="Commission a licensed structural engineer of record (SER) to prepare finite element load analyses, ductile detailing per IS 13920, and 28-day concrete cube compression testing protocol.",
+                        expected_benefit="Ensures building life safety, satisfies NBC Part 6 statutory criteria, and prevents uneven foundation differential settlement.",
+                        estimated_cost_inr=125000.0,
+                        time_horizon="immediate",
+                        confidence="high",
+                        data_sources=["IS 456:2000 Plain and Reinforced Concrete Code", "NBC 2016 Part 6", "IS 1893:2016"],
+                        assumptions=["Physical building will require independent rebar and footing engineering drawings"],
+                        missing_information=missing_docs,
+                        validation_requirements="Registered Structural Engineer of Record (SER) certificate of structural design adequacy."
+                    )
+                )
 
         # =========================================================================
         # CATEGORY C: INFRASTRUCTURE RESILIENCE

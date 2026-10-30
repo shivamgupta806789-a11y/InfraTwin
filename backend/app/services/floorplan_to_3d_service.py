@@ -189,8 +189,12 @@ class FloorplanTo3dService:
                             "Thickness": wall.thickness_m,
                             "Height": floor_height_m,
                             "Confidence": wall.confidence,
+                            "MeasuredThicknessPx": wall.measured_thickness_px,
+                            "ValidationStatus": wall.validation_status,
                         },
-                        materials=["Aerated Autoclaved Concrete", "Gypsum Plaster"] if wall.wall_type == "interior" else ["Clay Brick Masonry", "Cement Render"],
+                        materials=["Reinforced Concrete Core", "Exterior Render"] if wall.wall_type == "exterior" else ["Lightweight AAC Block", "Gypsum Plaster"],
+                        structural_role="load_bearing" if wall.wall_type == "exterior" else "non_load_bearing_partition",
+                        is_load_bearing=(wall.wall_type == "exterior"),
                         confidence_status="imported",
                     )
                     elements.append(wall_elem)
@@ -260,6 +264,8 @@ class FloorplanTo3dService:
                     conn_doors = cls._find_doors_for_room(room, active_doors)
                     conn_wins = cls._find_windows_for_room(room, active_windows)
 
+                    mat_title = (room.inferred_material or "hardwood").replace("_", " ").title()
+                    color_hex = room.dominant_color_hex or "#e2e8f0"
                     space_elem = BuildingElement(
                         element_id=f"space_f{floor_idx}_{room.id}",
                         source_global_id=f"IFC_SPACE_{uuid.uuid4().hex[:8]}",
@@ -284,6 +290,8 @@ class FloorplanTo3dService:
                                 "Dimensions": f"{room_w:.1f}m × {room_d:.1f}m",
                                 "ConnectedDoors": [d.id for d in conn_doors],
                                 "AssociatedWindows": [w.id for w in conn_wins],
+                                "InferredMaterial": room.inferred_material,
+                                "DominantColorHex": color_hex,
                             },
                             "RoomType": room.room_type,
                             "Area_m2": room.area_sqm,
@@ -292,8 +300,12 @@ class FloorplanTo3dService:
                             "Dimensions": f"{room_w:.1f}m × {room_d:.1f}m",
                             "ConnectedDoors": [d.id for d in conn_doors],
                             "AssociatedWindows": [w.id for w in conn_wins],
+                            "ColorHex": color_hex,
+                            "InferredMaterial": room.inferred_material,
                         },
-                        materials=["Commercial Broadloom Carpet", "Drywall Partition", "Mineral Fiber Acoustic Ceiling"],
+                        materials=[f"{mat_title} Flooring", "Interior Plasterboard Lining", "Acoustic Ceiling Tile"],
+                        structural_role="spatial_volume",
+                        is_load_bearing=False,
                         confidence_status="imported",
                         relationships={
                             "connected_doors": [d.id for d in conn_doors],
@@ -379,6 +391,22 @@ class FloorplanTo3dService:
         for e in elements:
             counts_by_type[e.element_type] = counts_by_type.get(e.element_type, 0) + 1
 
+        structural_audit = {
+            "has_structural_analytical_model": False,
+            "total_structural_elements": sum(1 for e in elements if e.is_load_bearing),
+            "total_partitions": sum(1 for e in elements if e.structural_role == "non_load_bearing_partition"),
+            "columns_count": 0,
+            "beams_count": 0,
+            "slabs_count": floors + 1,
+            "load_bearing_walls_count": sum(1 for e in elements if e.element_type == "IfcWall" and e.is_load_bearing),
+            "missing_structural_documentation": [
+                "2D architectural floor plan only: lacks structural engineering calculation sheet",
+                "Column and beam structural framing grid drawing required",
+                "Foundation design & soil bearing capacity report required"
+            ],
+            "engineering_disclaimer": "2D-to-3D extruded model represents architectural geometric enclosure only. Visual mesh does not constitute a structural engineering model or verify structural capacity."
+        }
+
         model_detail = BuildingModelDetail(
             model_id=model_id,
             source_type="floorplan",
@@ -394,6 +422,7 @@ class FloorplanTo3dService:
             total_element_count=len(elements),
             available_properties=["SlabType", "WallType", "Thickness", "Height", "Materials", "Elevation"],
             missing_data=["Structural reinforcement bar details", "MEP conduit paths"],
+            structural_audit=structural_audit,
             bounding_box=overall_bbox,
             provenance_metadata={
                 "source": "2D Architectural Drawing Ingestion",

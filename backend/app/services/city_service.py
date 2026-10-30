@@ -1,5 +1,12 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import math
+
+try:
+    from shapely.geometry import shape, Polygon
+    HAS_SHAPELY = True
+except ImportError:
+    HAS_SHAPELY = False
+
 from app.models.digital_twin import BoundingBox3D
 from app.models.city import (
     CityModel,
@@ -354,3 +361,248 @@ class CityService:
                     if b.building_id.lower() == building_id.lower():
                         return b
         return None
+
+    @classmethod
+    def _latlon_to_metric(cls, lat: float, lon: float, origin_lat: float, origin_lon: float) -> Tuple[float, float]:
+        """Convert WGS84 (lon, lat) to local Cartesian metric offset (x, y) in meters."""
+        r_earth = 6378137.0  # WGS84 major radius
+        lat_rad = math.radians(origin_lat)
+        x = (lon - origin_lon) * (math.pi / 180.0) * r_earth * math.cos(lat_rad)
+        y = (lat - origin_lat) * (math.pi / 180.0) * r_earth
+        return round(x, 2), round(y, 2)
+
+    @classmethod
+    def ingest_geojson_district(
+        cls,
+        geojson_data: Dict[str, Any],
+        district_name: str = "Imported District",
+        district_type: str = "Commercial Center",
+        origin_lat: Optional[float] = None,
+        origin_lon: Optional[float] = None
+    ) -> CityModel:
+        """
+        Ingests external GeoJSON FeatureCollection (e.g., OpenStreetMap or Microsoft Building Footprints)
+        into the canonical spatial hierarchy: CITY -> DISTRICT -> SITE -> BUILDING -> STOREY.
+        Converts building boundary polygons to LOD1 3D volumetric bounding geometries.
+        """
+        city = cls.get_default_city_model()
+        features = geojson_data.get("features", [])
+        if not features:
+            return city
+
+        # Determine reference origin
+        if origin_lat is None or origin_lon is None:
+            origin_lat = city.origin_latitude
+            origin_lon = city.origin_longitude
+
+        imported_buildings: List[CityBuildingSummary] = []
+        site_points: List[List[float]] = []
+
+        for idx, feat in enumerate(features):
+            geom = feat.get("geometry", {})
+            props = feat.get("properties", {}) or {}
+            geom_type = geom.get("type", "")
+
+            # Extract outer polygon ring
+            raw_coords = []
+            if geom_type == "Polygon":
+                rings = geom.get("coordinates", [])
+                if rings:
+                    raw_coords = rings[0]
+            elif geom_type == "MultiPolygon":
+                polys = geom.get("coordinates", [])
+                if polys and polys[0]:
+                    raw_coords = polys[0][0]
+
+            if len(raw_coords) < 3:
+                continue
+
+            # Check if coordinates are in lat/lon or already local Cartesian
+            is_latlon = abs(raw_coords[0][0]) <= 180.0 and abs(raw_coords[0][1]) <= 90.0
+            metric_ring: List[List[float]] = []
+            for pt in raw_coords:
+                if is_latlon:
+                    x, y = cls._latlon_to_metric(pt[1], pt[0], origin_lat, origin_lon)
+                else:
+                    x, y = float(pt[0]), float(pt[1])
+                metric_ring.append([x, y])
+
+            # Compute bounding box & centroid
+            xs = [p[0] for p in metric_ring]
+            ys = [p[1] for p in metric_ring]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            width = max(2.0, max_x - min_x)
+            length = max(2.0, max_y - min_y)
+            center_x = round((min_x + max_x) / 2.0, 2)
+            center_y = round((min_y + max_y) / 2.0, 2)
+
+            # Compute footprint area
+            if HAS_SHAPELY:
+                try:
+                    poly = Polygon(metric_ring)
+                    if not poly.is_valid:
+                        poly = poly.buffer(0)
+                    footprint_area = round(poly.area, 2)
+                    centroid = poly.centroid
+                    center_x, center_y = round(centroid.x, 2), round(centroid.y, 2)
+                except Exception:
+                    footprint_area = round(width * length * 0.75, 2)
+            else:
+                footprint_area = round(width * length * 0.75, 2)
+
+            if footprint_area <= 1.0:
+                footprint_area = round(width * length, 2)
+
+            # Extract building properties
+            b_id = str(props.get("id") or props.get("@id") or f"BLD-GIS-{idx+1:03d}")
+            b_name = str(props.get("name") or props.get("building") or f"Building {idx+1}")
+
+            raw_height = props.get("height")
+            raw_levels = props.get("building:levels") or props.get("levels")
+
+            if raw_levels is not None:
+                try:
+                    storeys = max(1, int(float(raw_levels)))
+                except ValueError:
+                    storeys = 2
+            else:
+                storeys = 2
+
+            if raw_height is not None:
+                try:
+                    height = max(3.0, float(raw_height))
+                except ValueError:
+                    height = storeys * 3.5
+            else:
+                height = storeys * 3.5
+
+            gfa = round(footprint_area * storeys, 2)
+
+            # Typology classification
+            raw_type = str(props.get("building") or props.get("type") or "commercial").lower()
+            if any(k in raw_type for k in ["residential", "apartments", "house", "detached"]):
+                typology = "Residential"
+                energy_intensity = 68.0
+                carbon_intensity = 380.0
+            elif any(k in raw_type for k in ["transit", "train_station", "subway", "transport"]):
+                typology = "Transit"
+                energy_intensity = 55.0
+                carbon_intensity = 520.0
+            elif any(k in raw_type for k in ["civic", "school", "hospital", "university", "library"]):
+                typology = "Civic"
+                energy_intensity = 74.0
+                carbon_intensity = 440.0
+            elif any(k in raw_type for k in ["retail", "mixed"]):
+                typology = "Mixed-Use"
+                energy_intensity = 88.0
+                carbon_intensity = 430.0
+            else:
+                typology = "Commercial"
+                energy_intensity = 85.0
+                carbon_intensity = 415.0
+
+            pv_kw = round((footprint_area * 0.6) / 6.0, 1)
+            occupancy = max(5, int(gfa / 14.0))
+
+            bld_summary = CityBuildingSummary(
+                building_id=b_id,
+                name=b_name,
+                typology=typology,
+                footprint_area_m2=footprint_area,
+                gross_floor_area_m2=gfa,
+                storeys_count=storeys,
+                height_m=round(height, 2),
+                center_x=center_x,
+                center_y=center_y,
+                center_z=0.0,
+                width_m=round(width, 2),
+                length_m=round(length, 2),
+                has_detailed_bim=False,
+                bim_model_id=None,
+                operational_energy_intensity_kwh_m2=energy_intensity,
+                embodied_carbon_kg_co2e_m2=carbon_intensity,
+                solar_pv_capacity_kw=pv_kw,
+                occupancy_capacity=occupancy
+            )
+            imported_buildings.append(bld_summary)
+            site_points.extend(metric_ring)
+
+        if not imported_buildings:
+            return city
+
+        # Create Site & District for imported features
+        site_xs = [p[0] for p in site_points]
+        site_ys = [p[1] for p in site_points]
+        site_poly = [
+            [min(site_xs) - 10.0, min(site_ys) - 10.0],
+            [max(site_xs) + 10.0, min(site_ys) - 10.0],
+            [max(site_xs) + 10.0, max(site_ys) + 10.0],
+            [min(site_xs) - 10.0, max(site_ys) + 10.0],
+        ]
+        site_w = max(site_xs) - min(site_xs) + 20.0
+        site_l = max(site_ys) - min(site_ys) + 20.0
+        site_area = round(site_w * site_l, 2)
+
+        site_id = f"SITE-IMP-{len(city.districts)+1}"
+        imported_site = SiteModel(
+            site_id=site_id,
+            name=f"{district_name} - Primary Parcel",
+            boundary_polygon=site_poly,
+            area_m2=site_area,
+            ground_elevation_m=0.0,
+            buildings=imported_buildings,
+            open_space_ratio=0.38,
+            tree_canopy_coverage_pct=26.0
+        )
+
+        dist_id = f"DIST-IMP-{len(city.districts)+1}"
+        imported_district = DistrictModel(
+            district_id=dist_id,
+            name=district_name,
+            district_type=district_type,
+            boundary_polygon=site_poly,
+            total_area_hectares=round(site_area / 10000.0, 2),
+            sites=[imported_site],
+            total_buildings_count=len(imported_buildings),
+            total_population_estimate=sum(b.occupancy_capacity for b in imported_buildings),
+            infrastructure_types=["Roads", "Power Grid", "Stormwater Drainage", "Fiber Telecom"]
+        )
+
+        # Merge into existing city districts
+        city.districts.append(imported_district)
+        city.total_buildings += len(imported_buildings)
+        city.total_gfa_m2 += sum(b.gross_floor_area_m2 for b in imported_buildings)
+
+        # Expand city bounding box
+        cur_bb = city.bounding_box
+        new_min_x = min(cur_bb.min_x, min(site_xs) - 20.0)
+        new_max_x = max(cur_bb.max_x, max(site_xs) + 20.0)
+        new_min_y = min(cur_bb.min_y, min(site_ys) - 20.0)
+        new_max_y = max(cur_bb.max_y, max(site_ys) + 20.0)
+        max_h = max([b.height_m for b in imported_buildings] + [cur_bb.max_z])
+
+        city.bounding_box = BoundingBox3D(
+            min_x=new_min_x,
+            max_x=new_max_x,
+            min_y=new_min_y,
+            max_y=new_max_y,
+            min_z=0.0,
+            max_z=max_h,
+            width=round(new_max_x - new_min_x, 2),
+            height=round(new_max_y - new_min_y, 2),
+            depth=round(max_h, 2),
+            center_x=round((new_min_x + new_max_x) / 2.0, 2),
+            center_y=round((new_min_y + new_max_y) / 2.0, 2),
+            center_z=round(max_h / 2.0, 2)
+        )
+        city.spatial_index_bounds = {
+            "min_x": new_min_x,
+            "max_x": new_max_x,
+            "min_y": new_min_y,
+            "max_y": new_max_y,
+            "grid_cell_size_m": 50.0
+        }
+
+        cls._cached_city = city
+        return city

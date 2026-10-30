@@ -1,5 +1,5 @@
-from typing import List, Optional
-from fastapi import APIRouter, Query, HTTPException, status
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Query, HTTPException, status, Body
 from app.models.city import CityModel, CityBuildingSummary
 from app.services.city_service import CityService
 
@@ -34,3 +34,28 @@ async def get_city_building(building_id: str):
             detail=f"Building '{building_id}' not found in city dataset."
         )
     return bld
+
+
+@router.post("/ingest-geojson", response_model=CityModel)
+async def ingest_geojson(
+    geojson_data: Dict[str, Any] = Body(..., description="GeoJSON FeatureCollection with building polygon geometries"),
+    district_name: str = Query(default="Imported District", description="Name of the new district"),
+    district_type: str = Query(default="Commercial Center", description="District category")
+):
+    """
+    Ingests GeoJSON FeatureCollection into the canonical hierarchy (CITY -> DISTRICT -> SITE -> BUILDING).
+    Translates GIS polygons to LOD1 3D volumetric buildings with operational energy and carbon estimates.
+    """
+    try:
+        updated_city = CityService.ingest_geojson_district(
+            geojson_data=geojson_data,
+            district_name=district_name,
+            district_type=district_type
+        )
+        return updated_city
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to ingest GeoJSON dataset: {str(e)}"
+        )
+

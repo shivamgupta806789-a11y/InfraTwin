@@ -50,6 +50,13 @@ class BuildingElement(BaseModel):
     relationships: Dict[str, Any] = Field(default_factory=dict)
     quantity_estimates: Dict[str, float] = Field(default_factory=dict)
     property_provenance: Dict[str, str] = Field(default_factory=dict)
+    structural_role: str = Field(
+        default="unspecified",
+        description="'load_bearing', 'structural_framing', 'non_load_bearing_partition', 'aperture', 'spatial_volume', or 'unspecified'"
+    )
+    is_load_bearing: Optional[bool] = None
+    structural_material_grade: Optional[str] = None
+    fire_rating: Optional[str] = None
     confidence_status: str = Field(
         default="imported",
         description="Data confidence status: 'imported', 'inferred', or 'unverified'"
@@ -78,6 +85,10 @@ class BuildingModel(BaseModel):
     total_element_count: int = 0
     available_properties: List[str] = Field(default_factory=list)
     missing_data: List[str] = Field(default_factory=list)
+    structural_audit: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Structural property completeness, load-bearing breakdown, and missing documentation notices"
+    )
     bounding_box: Optional[BoundingBox3D] = None
     provenance_metadata: Dict[str, Any] = Field(default_factory=dict)
 

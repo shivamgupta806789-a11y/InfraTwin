@@ -12,9 +12,13 @@ class Wall2D(BaseModel):
     start: Point2D
     end: Point2D
     thickness_m: float = Field(default=0.2, ge=0.05, le=1.5, description="Wall thickness in meters")
+    measured_thickness_px: Optional[float] = Field(default=None, description="Actual measured stroke width in image pixels")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Detection confidence score")
     wall_type: str = Field(default="exterior", description="'exterior', 'interior', or 'partition'")
     detection_status: str = Field(default="DETECTED", description="'DETECTED', 'USER_CONFIRMED', 'INFERRED', 'UNCERTAIN', 'MISSING'")
+    validation_status: str = Field(default="VALID", description="'VALID', 'DISCONNECTED', 'OVERLAPPING', 'REPAIRED', 'UNCERTAIN'")
+    validation_errors: List[str] = Field(default_factory=list)
+    connectivity_degree: int = Field(default=2, description="Number of connected or intersecting walls at junctions")
     source_page: int = Field(default=1, description="Source page or drawing sheet index")
     is_active: bool = Field(default=True, description="Whether this wall is included in 3D generation")
 
@@ -28,6 +32,7 @@ class Door2D(BaseModel):
     confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     swing_direction: Optional[str] = Field(default="inward_left", description="Optional swing arc indicator")
     detection_status: str = Field(default="DETECTED", description="'DETECTED', 'USER_CONFIRMED', 'INFERRED', 'UNCERTAIN', 'MISSING'")
+    validation_status: str = Field(default="VALID", description="'VALID', 'UNHOSTED', 'COLLIDING'")
     source_page: int = Field(default=1)
     is_active: bool = Field(default=True)
 
@@ -41,6 +46,7 @@ class Window2D(BaseModel):
     sill_height_m: float = Field(default=0.9, ge=0.0, le=2.0, description="Window sill elevation above floor slab")
     confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     detection_status: str = Field(default="DETECTED", description="'DETECTED', 'USER_CONFIRMED', 'INFERRED', 'UNCERTAIN', 'MISSING'")
+    validation_status: str = Field(default="VALID", description="'VALID', 'UNHOSTED', 'COLLIDING'")
     source_page: int = Field(default=1)
     is_active: bool = Field(default=True)
 
@@ -53,13 +59,20 @@ class Room2D(BaseModel):
     room_type: str = Field(default="office", description="'office', 'living', 'bedroom', 'corridor', 'bathroom', 'kitchen', 'balcony', 'other'")
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     detection_status: str = Field(default="DETECTED", description="'DETECTED', 'USER_CONFIRMED', 'INFERRED', 'UNCERTAIN', 'MISSING'")
+    dominant_color_hex: Optional[str] = Field(default=None, description="Dominant interior hex fill color extracted from original drawing")
+    color_rgb: Optional[List[int]] = Field(default=None, description="RGB values [R, G, B] of interior region")
+    inferred_material: str = Field(default="hardwood", description="'hardwood', 'ceramic_tile', 'polished_concrete', 'landscaped_vegetation', 'water_feature', 'carpet', 'custom'")
+    material_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    is_valid_polygon: bool = Field(default=True, description="Whether polygon is non-self-intersecting and topologically valid")
+    validation_errors: List[str] = Field(default_factory=list)
     source_page: int = Field(default=1)
 
 
 class ScaleReference(BaseModel):
     known_dimension_m: Optional[float] = Field(default=None, description="User-supplied real-world reference dimension")
     pixels_per_meter: float = Field(default=50.0, gt=0.0, description="Pixel to meter ratio")
-    method: str = Field(default="default", description="'user_hint', 'auto_dimension', 'ratio_inferred', or 'default'")
+    method: str = Field(default="default", description="'user_hint', 'ocr_text_extracted', 'ratio_inferred', or 'default'")
+    detected_labels: List[str] = Field(default_factory=list, description="Extracted scale or dimension text strings")
     pixel_span: Optional[float] = None
 
 
@@ -106,6 +119,7 @@ class FloorPlan2D(BaseModel):
     windows: List[Window2D] = Field(default_factory=list)
     rooms: List[Room2D] = Field(default_factory=list)
     site_representation: Optional[Dict[str, Any]] = None
+    geometry_validation_report: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Detailed geometric validation statistics")
     overall_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     warnings: List[str] = Field(default_factory=list)
 
