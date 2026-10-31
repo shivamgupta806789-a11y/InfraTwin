@@ -92,7 +92,12 @@ class BuildingFeatureService:
         coord_assump = None
 
         if lat is None or lon is None:
-            if model and model.provenance_metadata.get("latitude"):
+            if model and model.project_location:
+                lat = model.project_location.latitude
+                lon = model.project_location.longitude
+                coord_source = f"PROJECT_LOCATION_{model.project_location.georeferenced_source.upper()}"
+                coord_conf = "USER_CONFIRMED" if model.project_location.is_confirmed else "DOCUMENTED"
+            elif model and model.provenance_metadata.get("latitude"):
                 lat = float(model.provenance_metadata["latitude"])
                 lon = float(model.provenance_metadata["longitude"])
                 coord_source = "IFC_SITE_METADATA"

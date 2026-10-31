@@ -108,6 +108,10 @@ class AppliedInterventionsRequest(BaseModel):
     floors: Optional[int] = None
     floor_height_m: Optional[float] = None
     window_count: Optional[int] = None
+    latitude: Optional[float] = Field(default=None, description="Project latitude WGS84")
+    longitude: Optional[float] = Field(default=None, description="Project longitude WGS84")
+    address: Optional[str] = Field(default=None, description="Project address or city name")
+    climate_zone: Optional[str] = Field(default=None, description="Project Köppen climate zone")
 
 class AppliedInterventionsResponse(BaseModel):
     model_id: Optional[str] = None
@@ -115,6 +119,10 @@ class AppliedInterventionsResponse(BaseModel):
     total_applied_cost: float
     applied_count: int
     rejected_count: int
+    project_location: Optional[Dict[str, Any]] = None
+    climate_summary: Optional[Dict[str, Any]] = None
+    contributing_datasets: List[str] = Field(default_factory=list)
+    optimal_bundles: List[Dict[str, Any]] = Field(default_factory=list)
     diagnostic_logs: List[str] = Field(default_factory=list)
-    provenance: str = "Deterministic Engineering & Geometry Placement Validation Pipeline"
+    provenance: str = "Deterministic Engineering & Geometry Placement Validation Pipeline (CPWD / MNRE 2023-2024)"
 

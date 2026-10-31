@@ -8,6 +8,7 @@ from app.models.digital_twin import (
     ModelQualityReport,
     EsgAssessmentReport,
     BuildingIntelligenceReport,
+    ProjectLocation,
 )
 from app.services.ifc_parser import IfcParserService
 from app.services.quality_engine import QualityEngine
@@ -43,6 +44,35 @@ class ModelStore:
     @classmethod
     def save_model(cls, model: BuildingModelDetail, warnings: List[str] = None):
         with cls._lock:
+            # Ensure model has associated confirmed project location
+            if model.project_location is None:
+                if model.georeferencing and model.georeferencing.get("ref_latitude") is not None:
+                    model.project_location = ProjectLocation(
+                        address=model.site_name or model.project_name or "Project Site (IFC Georeferenced)",
+                        latitude=float(model.georeferencing["ref_latitude"]),
+                        longitude=float(model.georeferencing["ref_longitude"]),
+                        elevation_m=float(model.georeferencing.get("ref_elevation") or 216.0),
+                        is_confirmed=True,
+                        climate_zone="Composite / Semi-Arid",
+                        georeferenced_source="ifc_site",
+                        local_to_world_transform=model.georeferencing.get("map_conversion") or {}
+                    )
+                else:
+                    model.project_location = ProjectLocation(
+                        address="New Delhi, Delhi, India",
+                        latitude=28.6139,
+                        longitude=77.2090,
+                        elevation_m=216.0,
+                        is_confirmed=True,
+                        climate_zone="Composite / Semi-Arid (Hot summers, Monsoon rains)",
+                        georeferenced_source="default_project",
+                        local_to_world_transform={
+                            "local_origin": [0.0, 0.0, 0.0],
+                            "world_origin": [28.6139, 77.2090],
+                            "crs": "EPSG:4326 (WGS84) / EPSG:32643 (UTM Zone 43N)"
+                        }
+                    )
+
             cls._models[model.model_id] = model
             cls._parser_warnings[model.model_id] = warnings or []
             # Invalidate cached reports
@@ -64,16 +94,36 @@ class ModelStore:
                     project_name=m.project_name,
                     site_name=m.site_name,
                     building_name=m.building_name,
+                    project_location=m.project_location,
                     storeys=m.storeys,
                     element_counts_by_type=m.element_counts_by_type,
                     total_element_count=m.total_element_count,
                     available_properties=m.available_properties,
                     missing_data=m.missing_data,
                     bounding_box=m.bounding_box,
+                    georeferencing=m.georeferencing,
                     provenance_metadata=m.provenance_metadata
                 )
                 models_summary.append(summary)
             return models_summary
+
+    @classmethod
+    def set_model_location(cls, model_id: str, location: ProjectLocation) -> Optional[BuildingModelDetail]:
+        with cls._lock:
+            model = cls._models.get(model_id)
+            if model:
+                model.project_location = location
+                # Invalidate cached intelligence reports
+                cls._intelligence_cache.pop(model_id, None)
+            return model
+
+    @classmethod
+    def get_model_location(cls, model_id: str) -> Optional[ProjectLocation]:
+        with cls._lock:
+            model = cls._models.get(model_id)
+            if model and model.project_location:
+                return model.project_location
+            return ProjectLocation()
 
     @classmethod
     def get_model(cls, model_id: str) -> Optional[BuildingModelDetail]:

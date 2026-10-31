@@ -5,6 +5,7 @@ import {
   ApiHealthResponse,
   AppliedInterventionsRequest,
   AppliedInterventionsResponse,
+  OptimalBundle,
 } from '../types/recommendations';
 import {
   BuildingModel,
@@ -13,6 +14,7 @@ import {
   ModelQualityReport,
   EsgAssessmentReport,
   BuildingIntelligenceReport,
+  ProjectLocation,
 } from '../types/digital_twin';
 import {
   FloorPlanExtractionResponse,
@@ -711,6 +713,50 @@ export async function generateAppliedInterventionsApi(
     throw new ApiError(data?.detail || 'Failed to generate applied interventions', response.status);
   }
   return data as AppliedInterventionsResponse;
+}
+
+export async function getModelLocationApi(modelId: string): Promise<ProjectLocation> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/models/${encodeURIComponent(modelId)}/location`);
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch model location', response.status);
+  }
+  return data as ProjectLocation;
+}
+
+export async function setModelLocationApi(
+  modelId: string,
+  location: ProjectLocation
+): Promise<ProjectLocation> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/models/${encodeURIComponent(modelId)}/location`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(location),
+    }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to set model location', response.status);
+  }
+  return data as ProjectLocation;
+}
+
+export async function getModelOptimalBundlesApi(
+  modelId: string,
+  lat?: number,
+  lon?: number
+): Promise<OptimalBundle[]> {
+  const query = lat !== undefined && lon !== undefined ? `?latitude=${lat}&longitude=${lon}` : '';
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/models/${encodeURIComponent(modelId)}/bundles${query}`
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch optimal bundles', response.status);
+  }
+  return data as OptimalBundle[];
 }
 
 export { ApiError, API_BASE_URL };

@@ -47,6 +47,17 @@ export interface StoreyInfo {
   element_count: number;
 }
 
+export interface ProjectLocation {
+  address: string;
+  latitude: number;
+  longitude: number;
+  elevation_m?: number | null;
+  is_confirmed: boolean;
+  climate_zone: string;
+  georeferenced_source: string;
+  local_to_world_transform?: Record<string, any>;
+}
+
 export interface BuildingModel {
   model_id: string;
   source_type: 'ifc' | 'dxf' | 'sample';
@@ -57,6 +68,7 @@ export interface BuildingModel {
   project_name?: string | null;
   site_name?: string | null;
   building_name?: string | null;
+  project_location?: ProjectLocation | null;
   storeys: StoreyInfo[];
   element_counts_by_type: Record<string, number>;
   total_element_count: number;

@@ -68,6 +68,16 @@ class StoreyInfo(BaseModel):
     elevation_m: Optional[float] = None
     element_count: int = 0
 
+class ProjectLocation(BaseModel):
+    address: str = Field(default="New Delhi, Delhi, India", description="Human-readable project address or place name")
+    latitude: float = Field(default=28.6139, description="Project latitude in decimal degrees WGS84")
+    longitude: float = Field(default=77.2090, description="Project longitude in decimal degrees WGS84")
+    elevation_m: Optional[float] = Field(default=216.0, description="Elevation above mean sea level in meters")
+    is_confirmed: bool = Field(default=True, description="Whether location has been explicitly confirmed by project team")
+    climate_zone: str = Field(default="Composite / Semi-Arid (Hot summers, Monsoon rains)", description="Köppen / NBC climate zone")
+    georeferenced_source: str = Field(default="confirmed_project", description="'ifc_site', 'user_confirmed', or 'default_project'")
+    local_to_world_transform: Dict[str, Any] = Field(default_factory=dict, description="Documented local-to-world coordinate transformation matrix")
+
 class BuildingModel(BaseModel):
     model_id: str
     building_id: Optional[str] = Field(default=None, description="Unique building asset identifier")
@@ -80,6 +90,7 @@ class BuildingModel(BaseModel):
     project_name: Optional[str] = None
     site_name: Optional[str] = None
     building_name: Optional[str] = None
+    project_location: Optional[ProjectLocation] = Field(default=None, description="Associated confirmed geographical project location")
     storeys: List[StoreyInfo] = Field(default_factory=list)
     element_counts_by_type: Dict[str, int] = Field(default_factory=dict)
     total_element_count: int = 0

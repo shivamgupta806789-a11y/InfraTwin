@@ -21,6 +21,22 @@ export interface StructuredIntervention {
   components_3d: Intervention3DComponent[];
 }
 
+import { ProjectLocation } from './digital_twin';
+
+export interface OptimalBundle {
+  id: string;
+  name: string;
+  badge: string;
+  badgeColor: string;
+  description: string;
+  interventions: InterventionId[];
+  energySavingPct: number;
+  waterSavingKL: number;
+  runoffReductionPct: number;
+  carbonReductionPct: number;
+  provenance?: string;
+}
+
 export interface AppliedInterventionsRequest {
   model_id?: string | null;
   selected_intervention_ids: string[];
@@ -30,6 +46,10 @@ export interface AppliedInterventionsRequest {
   floors?: number;
   floor_height_m?: number;
   window_count?: number;
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+  climate_zone?: string;
 }
 
 export interface AppliedInterventionsResponse {
@@ -38,6 +58,10 @@ export interface AppliedInterventionsResponse {
   total_applied_cost: number;
   applied_count: number;
   rejected_count: number;
+  project_location?: ProjectLocation | null;
+  climate_summary?: Record<string, any>;
+  contributing_datasets?: string[];
+  optimal_bundles?: OptimalBundle[];
   diagnostic_logs: string[];
   provenance: string;
 }

@@ -11,6 +11,7 @@ from app.models.digital_twin import (
     ModelQualityReport,
     EsgAssessmentReport,
     BuildingIntelligenceReport,
+    ProjectLocation,
 )
 from app.models.recommendations import (
     AppliedInterventionsRequest,
@@ -224,6 +225,51 @@ async def get_model_parametric_baseline(model_id: str):
             detail=f"Model '{model_id}' was not found."
         )
     return baseline
+
+@router.get("/{model_id}/location", response_model=ProjectLocation)
+async def get_model_project_location(model_id: str):
+    """
+    Retrieves the confirmed geographical location, coordinate origin, and climate zone
+    associated with the active BIM model.
+    """
+    loc = ModelStore.get_model_location(model_id)
+    if not loc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_id}' was not found."
+        )
+    return loc
+
+@router.post("/{model_id}/location", response_model=ProjectLocation)
+async def set_model_project_location(
+    model_id: str,
+    location: ProjectLocation
+):
+    """
+    Associates a user-confirmed geographical location with the active BIM model,
+    triggering re-anchoring of environmental, climatic, and multi-domain recommendations.
+    """
+    updated = ModelStore.set_model_location(model_id, location)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_id}' was not found."
+        )
+    return location
+
+@router.get("/{model_id}/bundles")
+async def get_model_optimal_bundles(
+    model_id: str,
+    latitude: Optional[float] = Query(default=None),
+    longitude: Optional[float] = Query(default=None)
+):
+    """
+    Generates location-aware optimal recommendation bundles:
+    - Best Overall Balanced
+    - Best Environmental (Max Decarbonization)
+    - Best Affordability (Fastest Payback)
+    """
+    return InterventionService.get_optimal_bundles_for_location(model_id, latitude, longitude)
 
 @router.post("/{model_id}/interventions", response_model=AppliedInterventionsResponse)
 async def generate_model_interventions(
