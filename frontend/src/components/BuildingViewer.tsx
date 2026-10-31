@@ -1756,9 +1756,14 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
         } else if (comp.component_type === 'solar_mounting_rack') {
           roughness = 0.4;
           metalness = 0.8;
-        } else if (comp.component_type === 'window_louvers') {
+        } else if (comp.component_type === 'window_louvers' || comp.component_type === 'clerestory_louver') {
           roughness = 0.35;
           metalness = 0.7;
+        } else if (comp.component_type === 'greenhouse') {
+          roughness = 0.1;
+          metalness = 0.6;
+          opacity = 0.6;
+          transparent = true;
         }
 
         const mat = new THREE.MeshStandardMaterial({

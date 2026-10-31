@@ -1,4 +1,14 @@
-export type InterventionId = 'external_shading' | 'reflective_roof' | 'roof_insulation' | 'solar_pv';
+export type InterventionId =
+  | 'external_shading'
+  | 'reflective_roof'
+  | 'roof_insulation'
+  | 'solar_pv'
+  | 'rainwater_harvesting'
+  | 'stormwater_bioswale'
+  | 'permeable_paving'
+  | 'green_roof'
+  | 'natural_ventilation'
+  | 'rooftop_greenhouse';
 
 export interface BuildingParams {
   width_m: number;

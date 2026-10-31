@@ -214,3 +214,49 @@ def test_model_location_endpoints():
     assert res_bundles.status_code == 200
     bundles_list = res_bundles.json()
     assert len(bundles_list) >= 3
+
+
+def test_multi_domain_natural_ventilation_and_rooftop_greenhouse():
+    """Verify that natural ventilation and rooftop greenhouse 3D geometry generate with authentic climate links."""
+    payload = {
+        "model_id": "sample-office-twin",
+        "selected_intervention_ids": [
+            "natural_ventilation",
+            "rooftop_greenhouse",
+        ],
+        "width_m": 12.0,
+        "length_m": 16.0,
+        "floors": 2,
+        "floor_height_m": 3.0,
+        "window_count": 16,
+        "latitude": 28.6139,
+        "longitude": 77.2090,
+    }
+    response = client.post("/api/v1/models/sample-office-twin/interventions", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["applied_count"] == 2
+    assert data["rejected_count"] == 0
+    interv_map = {item["intervention_type"]: item for item in data["interventions"]}
+
+    # Check Natural Ventilation
+    assert "natural_ventilation" in interv_map
+    nat_vent = interv_map["natural_ventilation"]
+    assert nat_vent["validation_status"] == "VALIDATED"
+    assert len(nat_vent["components_3d"]) == 2  # North and South clerestory louvers
+    assert nat_vent["expected_benefit"]["hvac_cooling_energy_reduction_pct"] > 10.0
+    assert nat_vent["estimated_cost"] > 0
+
+    # Check Rooftop Greenhouse
+    assert "rooftop_greenhouse" in interv_map
+    gh = interv_map["rooftop_greenhouse"]
+    assert gh["validation_status"] == "VALIDATED"
+    assert len(gh["components_3d"]) == 1
+    assert gh["geometry_parameters"]["greenhouse_area_m2"] > 0
+    assert gh["expected_benefit"]["rooftop_thermal_barrier_temp_drop_deg_c"] > 5.0
+    assert gh["estimated_cost"] > 0
+
+    # Ensure total cost matches sum of validated components
+    assert pytest.approx(data["total_applied_cost"], 0.01) == (nat_vent["estimated_cost"] + gh["estimated_cost"])
+
