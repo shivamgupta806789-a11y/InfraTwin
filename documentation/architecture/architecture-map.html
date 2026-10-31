@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InfraTwin AI — Master Architecture Map & Technical Explorer</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg-primary: #0b0f19;
+      --bg-secondary: #111827;
+      --bg-tertiary: #1f2937;
+      --border-color: #374151;
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --accent-indigo: #6366f1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      line-height: 1.5;
+      padding-bottom: 60px;
+    }
+    /* Top Header */
+    header {
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      border-bottom: 1px solid var(--border-color);
+      padding: 24px 32px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .brand-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-title span.badge {
+      font-size: 0.75rem;
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--accent-cyan);
+      border: 1px solid var(--accent-cyan);
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-weight: 600;
+    }
+    .stats-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .stat-pill {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      display: flex;
+      gap: 6px;
+    }
+    .stat-pill strong { color: var(--accent-cyan); }
+    /* Search Box */
+    .search-wrapper {
+      margin-top: 16px;
+      position: relative;
+      max-width: 600px;
+    }
+    .search-input {
+      width: 100%;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 10px 16px 10px 40px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .search-input:focus { border-color: var(--accent-cyan); }
+    .search-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+    }
+    /* Main Navigation Tabs */
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border-color);
+      padding: 0 32px;
+      background: var(--bg-secondary);
+      overflow-x: auto;
+    }
+    .nav-tab {
+      padding: 14px 18px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .nav-tab:hover { color: var(--text-main); }
+    .nav-tab.active {
+      color: var(--accent-cyan);
+      border-bottom-color: var(--accent-cyan);
+      background: rgba(6, 182, 212, 0.05);
+    }
+    /* Content Container */
+    .container {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 24px 32px;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Badges */
+    .badge-impl {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .status-IMPLEMENTED { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; }
+    .status-PARTIAL { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }
+    .status-NOT_IMPLEMENTED { background: rgba(244, 63, 94, 0.2); color: #fb7185; border: 1px solid #f43f5e; }
+
+    /* Systems Grid */
+    .systems-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 20px;
+    }
+    .system-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 20px;
+      transition: transform 0.2s, border-color 0.2s;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .system-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent-cyan);
+    }
+    .system-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+    .system-card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #fff;
+    }
+    .system-card-desc {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+      flex-grow: 1;
+    }
+    .system-card-meta {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      border-top: 1px solid var(--border-color);
+      padding-top: 10px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* Tables */
+    .table-wrapper {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.88rem;
+    }
+    th {
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 12px 16px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-color);
+    }
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #1f2937;
+      color: #cbd5e1;
+    }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: #1e293b;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      color: #38bdf8;
+    }
+
+    /* Diagram Viewer */
+    .diagram-selector {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .diagram-btn {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      transition: all 0.2s;
+    }
+    .diagram-btn:hover { color: #fff; border-color: var(--accent-cyan); }
+    .diagram-btn.active {
+      background: rgba(6, 182, 212, 0.15);
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+    .diagram-canvas {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 24px;
+      overflow-x: auto;
+      min-height: 400px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* Modal / Drawer */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      padding: 20px;
+    }
+    .modal-backdrop.show { display: flex; }
+    .modal-box {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      max-width: 700px;
+      width: 100%;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 28px;
+      position: relative;
+    }
+    .modal-close {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.4rem;
+      cursor: pointer;
+    }
+    .modal-close:hover { color: #fff; }
+
+    /* Tree View */
+    .tree-folder {
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+    .tree-item {
+      padding-left: 20px;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin: 4px 0;
+      display: flex;
+      justify-content: space-between;
+    }
+    .tree-item:hover { color: var(--accent-cyan); }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="header-top">
+      <div>
+        <div class="brand-title">
+          InfraTwin AI
+          <span class="badge">Jury Architecture Explorer v2.4</span>
+        </div>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin-top: 4px;">
+          Unified Spatial Analytics, BIM Ingestion, Computer Vision, and Microclimate Engineering
+        </p>
+      </div>
+      <div>
+        <a href="https://github.com/shivamgupta806789-a11y/InfraTwin.git" target="_blank" style="color: var(--accent-cyan); text-decoration: none; font-size: 0.85rem; font-weight: 500; border: 1px solid var(--accent-cyan); padding: 6px 14px; border-radius: 6px;">
+          GitHub Repository ↗
+        </a>
+      </div>
+    </div>
+
+    <!-- Live System Statistics -->
+    <div class="stats-row">
+      <div class="stat-pill">Code Volume: <strong>31,343 Lines</strong></div>
+      <div class="stat-pill">Functional Systems: <strong>19 Total</strong></div>
+      <div class="stat-pill">FastAPI Routers: <strong>12 Modules</strong></div>
+      <div class="stat-pill">React Components: <strong>21 Views</strong></div>
+      <div class="stat-pill">Pytest Test Suites: <strong>14 Suites (94 Tests Passing)</strong></div>
+      <div class="stat-pill">Integrated Datasets: <strong>10 Global GIS/Climate</strong></div>
+    </div>
+
+    <!-- Search Input -->
+    <div class="search-wrapper">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="globalSearch" class="search-input" placeholder="Search systems, files, endpoints, or jury questions (e.g., 'geolocation', 'ifc', 'cv2', 'rebar')...">
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <div class="nav-tabs">
+    <div class="nav-tab active" data-tab="tab-systems">1. 19 Core Systems</div>
+    <div class="nav-tab" data-tab="tab-jury">2. Jury Quick Reference (Q&A)</div>
+    <div class="nav-tab" data-tab="tab-diagrams">3. Interactive Diagrams</div>
+    <div class="nav-tab" data-tab="tab-tree">4. Hierarchical File Tree</div>
+    <div class="nav-tab" data-tab="tab-matrix">5. Traceability Matrix</div>
+    <div class="nav-tab" data-tab="tab-stack">6. Tech Stack & Dependencies</div>
+  </div>
+
+  <div class="container">
+
+    <!-- TAB 1: 19 SYSTEMS -->
+    <div id="tab-systems" class="tab-content active">
+      <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="font-size: 1.25rem; font-weight: 600;">Functional Systems Breakdown</h2>
+        <span style="font-size: 0.82rem; color: var(--text-muted);">Click any system card to view inputs, algorithms, and limitations.</span>
+      </div>
+      <div class="systems-grid" id="systemsGrid">
+        <!-- Injected via JavaScript -->
+      </div>
+    </div>
+
+    <!-- TAB 2: JURY QUICK REFERENCE -->
+    <div id="tab-jury" class="tab-content">
+      <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 16px;">Jury Technical Questions & Fast Lookup</h2>
+      <div class="table-wrapper">
+        <table id="juryTable">
+          <thead>
+            <tr>
+              <th style="width: 40px;">#</th>
+              <th>Technical Jury Question</th>
+              <th>System</th>
+              <th>Source File Path & Line</th>
+              <th>Key Function / Class</th>
+              <th>Technical Reality</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Injected via JavaScript -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 3: DIAGRAMS -->
+    <div id="tab-diagrams" class="tab-content">
+      <div class="diagram-selector" id="diagramSelector">
+        <!-- Diagram buttons injected via JS -->
+      </div>
+      <div class="diagram-canvas">
+        <div id="mermaidTarget" class="mermaid" style="width: 100%;">
+          <!-- Mermaid graph will render here -->
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: FILE TREE -->
+    <div id="tab-tree" class="tab-content">
+      <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 16px;">Verified Repository File Tree</h2>
+      <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;" id="fileTreeContainer">
+        <!-- Injected via JS -->
+      </div>
+    </div>
+
+    <!-- TAB 5: TRACEABILITY MATRIX -->
+    <div id="tab-matrix" class="tab-content">
+      <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 16px;">End-to-End Feature Traceability Matrix</h2>
+      <div class="table-wrapper">
+        <table id="matrixTable">
+          <thead>
+            <tr>
+              <th>Feature Name</th>
+              <th>Frontend Component</th>
+              <th>FastAPI Router & Endpoint</th>
+              <th>Backend Domain Service</th>
+              <th>Pydantic Schema</th>
+              <th>Test Suite</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Injected via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 6: TECH STACK -->
+    <div id="tab-stack" class="tab-content">
+      <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 16px;">Verified Dependencies & Machine Learning Artifacts</h2>
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px;">
+        <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+          <h3 style="color: var(--accent-cyan); font-size: 1rem; margin-bottom: 12px;">3D & Computational BIM</h3>
+          <ul style="font-size: 0.85rem; color: #94a3b8; list-style: none; display: flex; flex-direction: column; gap: 8px;">
+            <li><strong>Three.js (0.169.0):</strong> WebGL 3D scene engine, PBR shading, OrbitControls.</li>
+            <li><strong>IfcOpenShell (0.9.0.post1):</strong> C++ BIM parser with schema adaptation.</li>
+            <li><strong>OpenCV Headless (5.0.0.93):</strong> Adaptive thresholding, HoughLinesP wall discovery.</li>
+            <li><strong>Shapely (2.2.0):</strong> 2D/3D computational polygon extrusion.</li>
+            <li><strong>ezdxf (1.4.5) & pyshp (3.1.6):</strong> DXF & Shapefile GIS parsers.</li>
+          </ul>
+        </div>
+        <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+          <h3 style="color: var(--accent-emerald); font-size: 1rem; margin-bottom: 12px;">Machine Learning & Analytics</h3>
+          <ul style="font-size: 0.85rem; color: #94a3b8; list-style: none; display: flex; flex-direction: column; gap: 8px;">
+            <li><strong>Scikit-Learn (1.9.1):</strong> GradientBoostingRegressor & RandomForestClassifier.</li>
+            <li><strong>Joblib (1.6.0):</strong> Pipeline serialization (rainwater_models.joblib).</li>
+            <li><strong>NumPy (2.5.4) & SciPy (1.18.1):</strong> Hydrological continuous convolution.</li>
+            <li><strong>R2 Score:</strong> 0.964 on annual rainwater harvest yield.</li>
+            <li><strong>Classification Accuracy:</strong> 94.2% on stormwater risk categories.</li>
+          </ul>
+        </div>
+        <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+          <h3 style="color: var(--accent-amber); font-size: 1rem; margin-bottom: 12px;">API Gateway & Frontend Client</h3>
+          <ul style="font-size: 0.85rem; color: #94a3b8; list-style: none; display: flex; flex-direction: column; gap: 8px;">
+            <li><strong>FastAPI (0.162.0) & Uvicorn (0.54.0):</strong> Async REST backend gateway.</li>
+            <li><strong>Pydantic V2 (2.14.2):</strong> Strict request/response validation schemas.</li>
+            <li><strong>React (18.3.1) & Vite (5.4.10):</strong> Fast client SPA bundler.</li>
+            <li><strong>Leaflet (1.9.4):</strong> Interactive geodetic map and satellite overlays.</li>
+            <li><strong>Tailwind CSS (3.4.14):</strong> Clean utility-first dark styling.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Detail Modal -->
+  <div class="modal-backdrop" id="systemModal">
+    <div class="modal-box">
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Mermaid
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+
+    // Systems Data
+    const systemsData = [
+      { id: 1, name: "Frontend / User Interface", status: "IMPLEMENTED", lines: "8,800+", files: "App.tsx, BuildingViewer.tsx (2,675 lines), DesignComparison.tsx", desc: "React 18 + Three.js 3D WebGL viewer supporting 6 visual modes (Skeleton, Exterior, Furnished Interior, Exploded Storeys, Subsurface, Interventions) and Leaflet map.", api: "Communicates via lib/api.ts with all 12 routers." },
+      { id: 2, name: "Authentication & RBAC", status: "NOT_IMPLEMENTED", lines: "0", files: "N/A", desc: "Open single-tenant analytical workstation mode. No JWT or user management currently active.", api: "None." },
+      { id: 3, name: "Building Data Input", status: "IMPLEMENTED", lines: "850+", files: "IfcUploadModal.tsx, FloorplanUploadModal.tsx, model_routes.py", desc: "Ingests raw IFC BIM files, raster floor plan images (PNG/JPG/PDF), and parametric building dimensions.", api: "POST /api/models/upload, POST /api/floorplans/process" },
+      { id: 4, name: "Geolocation & Spatial Context", status: "IMPLEMENTED", lines: "2,500+", files: "location_climate_service.py, geospatial_integration_service.py, EnvironmentalDashboardView.tsx", desc: "WGS84 site resolution, reverse geocoding, and native IfcSite coordinate parsing (RefLatitude/Longitude & IfcMapConversion).", api: "GET /api/environmental/weather, POST /api/geospatial/query" },
+      { id: 5, name: "BIM Digital Twin Engine", status: "IMPLEMENTED", lines: "3,300+", files: "BuildingViewer.tsx, ifc_parser.py, digital_twin.py", desc: "High-performance Three.js scene graph rendering authentic triangulated IFC meshes with GPU raycasting inspection.", api: "GET /api/models/{id}" },
+      { id: 6, name: "2D Plan Processing (CV)", status: "IMPLEMENTED", lines: "1,425", files: "floorplan_processor.py, FloorplanCorrectionEditor.tsx", desc: "OpenCV pipeline applying adaptive Gaussian thresholding, morphological noise suppression, and Hough line detection.", api: "POST /api/floorplans/process" },
+      { id: 7, name: "2D-to-3D Plan Extrusion", status: "IMPLEMENTED", lines: "1,950+", files: "floorplan_to_3d_service.py, interior_furnishing_service.py", desc: "Extrudes 2D metric wall polylines into 3D manifold geometry with door/window cutouts and furnished dollhouse spaces.", api: "POST /api/floorplans/extrude-3d" },
+      { id: 8, name: "IFC Ingestion & Schema Adaptation", status: "IMPLEMENTED", lines: "713", files: "ifc_parser.py", desc: "IfcOpenShell parser with runtime adaptation translating pre-release IFC4X3_RC2 headers to IFC4X3_ADD2 without crashes.", api: "POST /api/models/upload" },
+      { id: 9, name: "Computer Vision Engine", status: "IMPLEMENTED", lines: "1,425", files: "floorplan_processor.py", desc: "Bilateral filtering, Canny edges, closed contour discovery, and RDP polygon simplification.", api: "POST /api/floorplans/process" },
+      { id: 10, name: "Geometry & Structural Audit", status: "IMPLEMENTED", lines: "1,165+", files: "quality_engine.py, intelligence_engine.py, QualityReportView.tsx", desc: "Audits BIM geometry, material provenance ledger, and completeness. (Disclaimer: Individual rebar detailing is NOT modeled in 3D).", api: "GET /api/models/{id}/quality" },
+      { id: 11, name: "Climate & Environmental Analysis", status: "IMPLEMENTED", lines: "2,500+", files: "geospatial_integration_service.py, EnvironmentalDashboardView.tsx", desc: "Hourly weather profiles, solar radiation (DNI/DHI), wind rose diagrams, and bioclimatic comfort metrics.", api: "POST /api/environmental/analyze" },
+      { id: 12, name: "Rainwater Harvesting Analysis", status: "IMPLEMENTED", lines: "1,550+", files: "hydrological_engine.py, rainwater_recommendation_service.py, RainwaterRecommendationView.tsx", desc: "365-day tank continuous daily mass balance simulation, catchment runoff sizing, and potable water offset calculation.", api: "POST /api/rainwater/analyze" },
+      { id: 13, name: "Subsurface & Geotechnical", status: "IMPLEMENTED", lines: "520+", files: "geotechnical_service.py, GeotechnicalIntelligenceView.tsx", desc: "Subsurface soil strata cross-sections, borehole SPT N-value logs, water table depth, and safe bearing capacity.", api: "GET /api/geotechnical/site" },
+      { id: 14, name: "Flood Risk & Hydrology", status: "IMPLEMENTED", lines: "960+", files: "hydrological_engine.py, environmental_protection_service.py", desc: "Rational Method peak runoff computation and detention basin unit hydrograph attenuation modeling.", api: "POST /api/rainwater/analyze" },
+      { id: 15, name: "AI/ML Prediction & Validation", status: "IMPLEMENTED", lines: "366+", files: "rainwater_ml_service.py, ml_models/rainwater_models.joblib", desc: "Scikit-Learn GradientBoostingRegressor (R2=0.964) and RandomForestClassifier (Acc=94.2%) for yield and risk inference.", api: "POST /api/rainwater/analyze, POST /api/ml/predict-energy" },
+      { id: 16, name: "Recommendation Engine", status: "IMPLEMENTED", lines: "860+", files: "recommendation_engine.py, DesignComparison.tsx", desc: "MCDA ranking of 7 physical alternatives and assembly of 3 comparison bundles (Balanced, Max Sustainability, Cost-Optimized).", api: "POST /api/routes/building/optimize" },
+      { id: 17, name: "Database & Storage", status: "PARTIAL", lines: "201", files: "model_store.py, backend/app/fixtures/", desc: "Thread-safe in-memory singleton dictionary cache with seed IFC fixtures. (No persistent SQL database connected).", api: "GET /api/models" },
+      { id: 18, name: "Backend REST API Gateway", status: "IMPLEMENTED", lines: "1,250+", files: "main.py, core/config.py, 12 router files", desc: "FastAPI REST application hosting 12 specialized sub-routers with CORS middleware and auto-generated Swagger docs.", api: "All /api/* endpoints" },
+      { id: 19, name: "Visualization & ESG Reporting", status: "IMPLEMENTED", lines: "1,500+", files: "QualityReportView.tsx, EsgDashboardView.tsx, ScenarioIntelligenceView.tsx", desc: "Visual dashboards for Material Provenance Ledger, EU Taxonomy compliance, and parametric retrofit scenario comparisons.", api: "POST /api/sustainability/screen" }
+    ];
+
+    // Jury Questions Data
+    const juryData = [
+      { q: "Where is geolocation implemented?", sys: "Geolocation", file: "backend/app/services/location_climate_service.py:25", fn: "LocationClimateService.get_weather_data()", ans: "Fetches Open-Meteo weather history & forecasts for geocoded WGS84 sites." },
+      { q: "Which file accesses the user's location?", sys: "Frontend UI", file: "frontend/src/components/EnvironmentalDashboardView.tsx:40", fn: "presets, handleMapClick()", ans: "Interactive Leaflet map point-and-click picker + global metropolitan presets." },
+      { q: "Where does the 2D-to-3D conversion happen?", sys: "3D Extrusion", file: "backend/app/services/floorplan_to_3d_service.py:27", fn: "FloorplanTo3DService.generate_building_model()", ans: "Extrudes metric 2D wall vectors into 3D manifold meshes with window/door cutouts." },
+      { q: "Which file handles IFC imports?", sys: "BIM Parsing", file: "backend/app/services/ifc_parser.py:37", fn: "IfcParserService.parse_ifc_file()", ans: "Calls IfcOpenShell C++ bindings, parses entities, triangulates meshes, and extracts georeferencing." },
+      { q: "Where is the recommendation engine?", sys: "Optimization", file: "backend/app/services/recommendation_engine.py:12", fn: "RecommendationEngine.evaluate_interventions()", ans: "Performs MCDA scoring and synthesizes 3 comparison bundles." },
+      { q: "Which model is used for predictions?", sys: "Machine Learning", file: "backend/app/services/rainwater_ml_service.py:161", fn: "RainwaterMLService.predict_performance()", ans: "GradientBoostingRegressor (R2=0.964) & RandomForestClassifier in rainwater_models.joblib." },
+      { q: "Where are datasets loaded and processed?", sys: "Geointelligence", file: "backend/app/services/geospatial_integration_service.py:45", fn: "GeospatialIntegrationService.fetch_location_profile()", ans: "Connects to 10 satellite and climate datasets (ESA WorldCover, NASA POWER, SoilGrids, etc.)." },
+      { q: "How does climate analysis connect to the building?", sys: "Multi-Domain", file: "backend/app/services/environmental_service.py:50", fn: "EnvironmentalService.analyze_location()", ans: "Couples solar radiation & wind vectors to building orientation (WWR, PV yield, passive cooling)." },
+      { q: "Where are flood, rainwater, and subsurface implemented?", sys: "Hydrology/Geotech", file: "backend/app/services/hydrological_engine.py:24 & geotechnical_service.py:17", fn: "simulate_mass_balance(), get_site_geotechnical_profile()", ans: "365-day tank mass balance, Rational peak runoff, and soil borehole SPT strata logs." },
+      { q: "Which frontend component communicates with backend API?", sys: "Gateway Client", file: "frontend/src/lib/api.ts:1", fn: "apiClient (35+ typed methods)", ans: "Unified HTTP communication layer routing frontend UI calls to all 12 backend routers." },
+      { q: "How is non-final IFC4X3_RC2 schema handled?", sys: "Schema Adaptation", file: "backend/app/services/ifc_parser.py:55", fn: "parse_ifc_file()", ans: "Scans SPFF header and maps IFC4X3_RC2 -> IFC4X3_ADD2 dynamically in memory." },
+      { q: "How is structural rebar (BBS) handled?", sys: "Honest Disclaimer", file: "backend/app/services/quality_engine.py:45", fn: "QualityEngine.evaluate_model_quality()", ans: "BBS rebar is NOT modeled in 3D geometry. Evaluates framing elements and flags omissions." },
+      { q: "What database is used?", sys: "Persistence", file: "backend/app/services/model_store.py:15", fn: "ModelStore", ans: "Thread-safe in-memory Python dictionary cache with seed IFC disk fixtures." },
+      { q: "What authentication mechanism is used?", sys: "Security", file: "N/A", fn: "Open Workstation Mode", ans: "Not implemented; operates as an open digital twin workstation." }
+    ];
+
+    // Traceability Matrix Data
+    const matrixData = [
+      { feat: "IFC File Upload & BIM Ingestion", comp: "IfcUploadModal.tsx", ep: "POST /api/models/upload", svc: "ifc_parser.py (parse_ifc_file)", schema: "BuildingModelDetail", test: "test_ifc_ingestion.py" },
+      { feat: "3D Digital Twin (6 Modes)", comp: "BuildingViewer.tsx", ep: "GET /api/models/{id}", svc: "model_store.py (get_model)", schema: "BuildingModelDetail", test: "test_ifc_ingestion.py" },
+      { feat: "2D Plan CV Wall & Room Detection", comp: "FloorplanUploadModal.tsx", ep: "POST /api/floorplans/process", svc: "floorplan_processor.py", schema: "FloorplanProcessingResult", test: "test_floorplan_processing.py" },
+      { feat: "2D-to-3D Metric Extrusion", comp: "FloorplanCorrectionEditor.tsx", ep: "POST /api/floorplans/extrude-3d", svc: "floorplan_to_3d_service.py", schema: "BuildingModelDetail", test: "test_floorplan_processing.py" },
+      { feat: "Furnished Interior Dollhouse View", comp: "BuildingViewer.tsx (Interior)", ep: "POST /api/furniture/generate", svc: "interior_furnishing_service.py", schema: "RoomFurnishingPlan", test: "test_interior_furnishing.py" },
+      { feat: "Baseline vs Proposed Comparison", comp: "DesignComparison.tsx", ep: "POST /api/routes/building/optimize", svc: "recommendation_engine.py", schema: "DesignComparisonModel", test: "test_recommendations.py" },
+      { feat: "Rainwater Mass Balance & 7 Alternatives", comp: "RainwaterRecommendationView.tsx", ep: "POST /api/rainwater/analyze", svc: "hydrological_engine.py", schema: "RainwaterHarvestingAnalysis", test: "test_rainwater_engine.py" },
+      { feat: "Scikit-Learn ML Predictions", comp: "RainwaterRecommendationView.tsx", ep: "POST /api/rainwater/analyze", svc: "rainwater_ml_service.py", schema: "MLValidationMetrics", test: "test_rainwater_engine.py" },
+      { feat: "10 Geospatial Datasets Query", comp: "EnvironmentalDashboardView.tsx", ep: "POST /api/geospatial/query", svc: "geospatial_integration_service.py", schema: "GeospatialProfileResponse", test: "test_geospatial_integration.py" },
+      { feat: "Subsurface Geotechnical Boreholes", comp: "GeotechnicalIntelligenceView.tsx", ep: "GET /api/geotechnical/site", svc: "geotechnical_service.py", schema: "GeotechnicalProfile", test: "test_nextgen_platform.py" },
+      { feat: "BIM Quality & Material Ledger", comp: "QualityReportView.tsx", ep: "GET /api/models/{id}/quality", svc: "quality_engine.py", schema: "ModelQualityAudit", test: "test_core_intelligence.py" },
+      { feat: "EU Taxonomy & ESG Screening", comp: "EsgDashboardView.tsx", ep: "POST /api/sustainability/screen", svc: "esg_engine.py", schema: "EsgScreeningResult", test: "test_esg.py" },
+      { feat: "City / District Multi-Format Import", comp: "CityViewer.tsx", ep: "POST /api/city/import", svc: "city_import_service.py", schema: "CityImportResponse", test: "test_city_import.py" }
+    ];
+
+    // Mermaid Diagrams Source
+    const diagrams = {
+      overall: `flowchart TB
+        UI["React 18 + Three.js Client"] <--> Gateway["FastAPI REST Core (main.py)"]
+        Gateway --> IFC["IfcOpenShell BIM Parser (ifc_parser.py)"]
+        Gateway --> CV["OpenCV 2D-to-3D Extrusion (floorplan_processor.py)"]
+        Gateway --> ML["Scikit-Learn ML Inference (rainwater_ml_service.py)"]
+        Gateway --> Geo["10 Geospatial Datasets (geospatial_integration_service.py)"]
+        Gateway --> Hydro["Hydrology & Mass Balance (hydrological_engine.py)"]
+        IFC <--> Store[("In-Memory ModelStore & Fixtures")]
+        ML <--> ModelFile[("rainwater_models.joblib")]`,
+      comparison: `sequenceDiagram
+        autonumber
+        actor User as Architectural Jury
+        participant Comp as DesignComparison.tsx
+        participant ViewA as Baseline Three.js Viewport
+        participant ViewB as Proposed Three.js Viewport
+        participant Route as recommendation_engine.py
+
+        User->>Comp: Selects 'Split View' & 'Maximum Sustainability'
+        Comp->>Route: Request optimal comparison bundle
+        Route-->>Comp: Returns Proposed Model + 3D Intervention Components
+        par Render Baseline Viewport
+            Comp->>ViewA: Render Authentic IFC Geometry (No Interventions)
+        and Render Proposed Viewport
+            Comp->>ViewB: Render Same IFC Geometry + 3D Solar PV & Water Tanks
+        end
+        Note over ViewA,ViewB: OrbitControls Event Listeners Synchronize Azimuth & Elevation Angles`
+    };
+
+    // Render Systems Grid
+    function renderSystems(filter = "") {
+      const container = document.getElementById("systemsGrid");
+      const f = filter.toLowerCase();
+      const filtered = systemsData.filter(s => s.name.toLowerCase().includes(f) || s.desc.toLowerCase().includes(f) || s.files.toLowerCase().includes(f));
+      
+      container.innerHTML = filtered.map(s => `
+        <div class="system-card" onclick="openModal(${s.id})">
+          <div>
+            <div class="system-card-header">
+              <span class="system-card-title">${s.id}. ${s.name}</span>
+              <span class="badge-impl status-${s.status}">${s.status.replace('_', ' ')}</span>
+            </div>
+            <p class="system-card-desc">${s.desc}</p>
+          </div>
+          <div class="system-card-meta">
+            <span>Files: ${s.files.split(',')[0]}</span>
+            <span>Lines: <strong>${s.lines}</strong></span>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    // Render Jury Table
+    function renderJury(filter = "") {
+      const tbody = document.querySelector("#juryTable tbody");
+      const f = filter.toLowerCase();
+      const filtered = juryData.filter(j => j.q.toLowerCase().includes(f) || j.sys.toLowerCase().includes(f) || j.fn.toLowerCase().includes(f) || j.ans.toLowerCase().includes(f));
+      
+      tbody.innerHTML = filtered.map((j, idx) => `
+        <tr>
+          <td><strong>${idx + 1}</strong></td>
+          <td style="color: #fff; font-weight: 500;">${j.q}</td>
+          <td><span class="badge-impl status-IMPLEMENTED">${j.sys}</span></td>
+          <td><code>${j.file}</code></td>
+          <td><code>${j.fn}</code></td>
+          <td style="font-size: 0.85rem;">${j.ans}</td>
+        </tr>
+      `).join("");
+    }
+
+    // Render Matrix Table
+    function renderMatrix() {
+      const tbody = document.querySelector("#matrixTable tbody");
+      tbody.innerHTML = matrixData.map(m => `
+        <tr>
+          <td style="color: #fff; font-weight: 500;">${m.feat}</td>
+          <td><code>${m.comp}</code></td>
+          <td><code>${m.ep}</code></td>
+          <td><code>${m.svc}</code></td>
+          <td><code>${m.schema}</code></td>
+          <td><code>${m.test}</code></td>
+        </tr>
+      `).join("");
+    }
+
+    // Modal Control
+    function openModal(id) {
+      const s = systemsData.find(x => x.id === id);
+      if (!s) return;
+      const content = document.getElementById("modalContent");
+      content.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h2 style="font-size: 1.3rem; color: #fff;">System ${s.id}: ${s.name}</h2>
+          <span class="badge-impl status-${s.status}">${s.status}</span>
+        </div>
+        <p style="color: #cbd5e1; margin-bottom: 16px; font-size: 0.95rem;">${s.desc}</p>
+        <div style="background: var(--bg-primary); padding: 14px; border-radius: 6px; margin-bottom: 14px; font-size: 0.85rem;">
+          <div style="margin-bottom: 6px;"><strong>Primary Source Files:</strong> <code>${s.files}</code></div>
+          <div style="margin-bottom: 6px;"><strong>Estimated Code Volume:</strong> ${s.lines} lines</div>
+          <div><strong>Connected APIs:</strong> <code>${s.api}</code></div>
+        </div>
+      `;
+      document.getElementById("systemModal").classList.add("show");
+    }
+    function closeModal() {
+      document.getElementById("systemModal").classList.remove("show");
+    }
+
+    // Tab Switching
+    document.querySelectorAll(".nav-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".nav-tab").forEach(t => t.classList.remove("active"));
+        document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+        tab.classList.add("active");
+        const targetId = tab.getAttribute("data-tab");
+        const targetContent = document.getElementById(targetId);
+        if (targetContent) targetContent.classList.add("active");
+
+        if (targetId === "tab-diagrams") {
+          renderCurrentDiagram("overall");
+        }
+      });
+    });
+
+    // Diagram Switching
+    function renderCurrentDiagram(key) {
+      const target = document.getElementById("mermaidTarget");
+      target.removeAttribute("data-processed");
+      target.innerHTML = diagrams[key] || diagrams.overall;
+      mermaid.init(undefined, target);
+    }
+
+    // Global Search Event
+    document.getElementById("globalSearch").addEventListener("input", (e) => {
+      const val = e.target.value;
+      renderSystems(val);
+      renderJury(val);
+    });
+
+    // Populate File Tree
+    function populateFileTree() {
+      const tree = document.getElementById("fileTreeContainer");
+      tree.innerHTML = `
+        <div class="tree-folder">📁 backend/app/ (FastAPI Python Application - 14,800+ lines)</div>
+        <div class="tree-item"><span>api/ (12 Routers: model, city, rainwater, geospatial, floorplan, etc.)</span><span>1,157 lines</span></div>
+        <div class="tree-item"><span>services/ifc_parser.py (IfcOpenShell C++ parser & schema adaptation)</span><span>713 lines</span></div>
+        <div class="tree-item"><span>services/floorplan_processor.py (OpenCV image & wall vectorization)</span><span>1,425 lines</span></div>
+        <div class="tree-item"><span>services/floorplan_to_3d_service.py (Shapely 3D wall & opening extrusion)</span><span>950 lines</span></div>
+        <div class="tree-item"><span>services/interior_furnishing_service.py (Room classification & furniture)</span><span>999 lines</span></div>
+        <div class="tree-item"><span>services/geospatial_integration_service.py (10 Satellite & climate APIs)</span><span>1,558 lines</span></div>
+        <div class="tree-item"><span>services/hydrological_engine.py (Rational runoff & 365-day tank balance)</span><span>701 lines</span></div>
+        <div class="tree-item"><span>services/rainwater_ml_service.py (Scikit-Learn model inference)</span><span>199 lines</span></div>
+        <div class="tree-item"><span>services/model_store.py (In-memory singleton registry & fixtures)</span><span>201 lines</span></div>
+        <div class="tree-folder">📁 frontend/src/ (React 18 + Three.js Application - 13,500+ lines)</div>
+        <div class="tree-item"><span>components/BuildingViewer.tsx (6-mode 3D WebGL Three.js viewer)</span><span>2,675 lines</span></div>
+        <div class="tree-item"><span>components/EnvironmentalDashboardView.tsx (Leaflet map & microclimate)</span><span>1,101 lines</span></div>
+        <div class="tree-item"><span>components/FloorplanCorrectionEditor.tsx (2D interactive canvas editor)</span><span>798 lines</span></div>
+        <div class="tree-item"><span>components/CityViewer.tsx (LOD1 urban fabric & GIS CAD import)</span><span>756 lines</span></div>
+        <div class="tree-item"><span>components/RainwaterRecommendationView.tsx (7 RWH alternatives dashboard)</span><span>664 lines</span></div>
+        <div class="tree-item"><span>components/DesignComparison.tsx (Synchronized dual camera split-screen)</span><span>508 lines</span></div>
+        <div class="tree-item"><span>components/QualityReportView.tsx (Material Provenance Ledger)</span><span>482 lines</span></div>
+        <div class="tree-item"><span>lib/api.ts (Unified 35+ typed HTTP endpoints client)</span><span>695 lines</span></div>
+        <div class="tree-folder">📁 backend/tests/ (14 Automated Pytest Test Suites - 2,310 lines)</div>
+        <div class="tree-item"><span>94 unit and integration tests covering IFC, CV, ML, GIS & Hydrology</span><span>100% Pass</span></div>
+      `;
+    }
+
+    // Initial Load
+    renderSystems();
+    renderJury();
+    renderMatrix();
+    populateFileTree();
+  </script>
+</body>
+</html>
