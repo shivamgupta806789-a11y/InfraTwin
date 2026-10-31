@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from app.models.building import BuildingInput
+from app.models.rainwater import Intervention3DComponent
 
 class InterventionItem(BaseModel):
     id: str
@@ -78,3 +79,42 @@ class EstimateResponse(BaseModel):
     impact_estimates: List[ImpactEstimateItem]
     assumptions: List[str]
     missing_inputs: List[str]
+
+class StructuredIntervention(BaseModel):
+    intervention_id: str
+    recommendation_id: str
+    intervention_type: str
+    target_element_ids: List[str] = Field(default_factory=list)
+    target_floor: Optional[str] = None
+    geometry_parameters: Dict[str, Any] = Field(default_factory=dict)
+    material_parameters: Dict[str, Any] = Field(default_factory=dict)
+    world_position: List[float] = Field(default_factory=list, description="[x, y, z] anchor in IFC coordinate space")
+    dimensions: List[float] = Field(default_factory=list, description="[width, height, depth]")
+    orientation: Dict[str, float] = Field(default_factory=dict, description="tilt_deg, azimuth_deg")
+    estimated_cost: float
+    expected_benefit: Dict[str, Any] = Field(default_factory=dict)
+    calculation_method: str
+    assumptions: List[str] = Field(default_factory=list)
+    validation_status: str = Field(default="VALIDATED", description="'VALIDATED' | 'REJECTED' | 'PARTIAL'")
+    rejection_reason: Optional[str] = None
+    components_3d: List[Intervention3DComponent] = Field(default_factory=list)
+
+class AppliedInterventionsRequest(BaseModel):
+    model_id: Optional[str] = None
+    selected_intervention_ids: List[str]
+    budget_inr: Optional[float] = 1000000.0
+    width_m: Optional[float] = None
+    length_m: Optional[float] = None
+    floors: Optional[int] = None
+    floor_height_m: Optional[float] = None
+    window_count: Optional[int] = None
+
+class AppliedInterventionsResponse(BaseModel):
+    model_id: Optional[str] = None
+    interventions: List[StructuredIntervention]
+    total_applied_cost: float
+    applied_count: int
+    rejected_count: int
+    diagnostic_logs: List[str] = Field(default_factory=list)
+    provenance: str = "Deterministic Engineering & Geometry Placement Validation Pipeline"
+

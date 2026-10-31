@@ -1,8 +1,10 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { BuildingParams, InterventionId } from '../types/building';
 import { BuildingModelDetail } from '../types/digital_twin';
+import { StructuredIntervention } from '../types/recommendations';
 import { BuildingViewer, ViewerMode } from './BuildingViewer';
 import { formatINR } from '../lib/validation';
+import { generateAppliedInterventionsApi } from '../lib/api';
 import {
   Columns,
   Layers,
@@ -15,6 +17,11 @@ import {
   ShieldCheck,
   CheckCircle2,
   TrendingDown,
+  Eye,
+  XCircle,
+  ChevronDown,
+  ChevronUp,
+  Info,
 } from 'lucide-react';
 
 interface DesignComparisonProps {
@@ -90,6 +97,17 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('split');
   const [sharedViewerMode, setSharedViewerMode] = useState<ViewerMode>('exterior');
 
+  // Structured Interventions with Placement Validation state
+  const [appliedInterventions, setAppliedInterventions] = useState<StructuredIntervention[]>([]);
+  const [appliedCost, setAppliedCost] = useState<number>(totalCost);
+  const [appliedCount, setAppliedCount] = useState<number>(0);
+  const [rejectedCount, setRejectedCount] = useState<number>(0);
+  const [diagnosticLogs, setDiagnosticLogs] = useState<string[]>([]);
+  const [selectedInterventionId, setSelectedInterventionId] = useState<string | null>(null);
+  const [isolatedInterventionId, setIsolatedInterventionId] = useState<string | null>(null);
+  const [showLogsDrawer, setShowLogsDrawer] = useState<boolean>(false);
+  const [isLoadingInterventions, setIsLoadingInterventions] = useState<boolean>(false);
+
   // Synchronized camera state across side-by-side viewports
   const [cameraState, setCameraState] = useState<{
     position: [number, number, number];
@@ -97,6 +115,60 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
   } | null>(null);
 
   const lastCameraUpdateSourceRef = useRef<'baseline' | 'proposed' | null>(null);
+
+  // Load structured interventions whenever selected interventions or model change
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadInterventions() {
+      if (!params.selected_interventions || params.selected_interventions.length === 0) {
+        setAppliedInterventions([]);
+        setAppliedCost(0);
+        setAppliedCount(0);
+        setRejectedCount(0);
+        setDiagnosticLogs(['No upgrades currently selected.']);
+        return;
+      }
+
+      setIsLoadingInterventions(true);
+      try {
+        const res = await generateAppliedInterventionsApi({
+          model_id: importedModel?.model_id || 'sample-office-twin',
+          selected_intervention_ids: params.selected_interventions as string[],
+          width_m: params.width_m,
+          length_m: params.length_m,
+          floors: params.floors,
+          floor_height_m: params.floor_height_m,
+          window_count: params.window_count,
+        });
+
+        if (!isCancelled) {
+          setAppliedInterventions(res.interventions);
+          setAppliedCost(res.total_applied_cost);
+          setAppliedCount(res.applied_count);
+          setRejectedCount(res.rejected_count);
+          setDiagnosticLogs(res.diagnostic_logs || []);
+        }
+      } catch (err) {
+        console.warn('Intervention generation notice (using fallback):', err);
+      } finally {
+        if (!isCancelled) setIsLoadingInterventions(false);
+      }
+    }
+
+    loadInterventions();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    params.selected_interventions,
+    importedModel?.model_id,
+    params.width_m,
+    params.length_m,
+    params.floors,
+    params.window_count,
+  ]);
 
   const handleBaselineCameraChange = useCallback(
     (cam: { position: [number, number, number]; target: [number, number, number] }) => {
@@ -125,6 +197,21 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
     }
   };
 
+  const handleRemoveIntervention = (interventionId: string) => {
+    if (onInterventionsChange) {
+      const next = params.selected_interventions.filter((id) => id !== interventionId);
+      onInterventionsChange(next);
+    }
+  };
+
+  const handleToggleIsolate = (intervId: string) => {
+    setIsolatedInterventionId(prev => prev === intervId ? null : intervId);
+  };
+
+  const handleToggleHighlight = (intervId: string) => {
+    setSelectedInterventionId(prev => prev === intervId ? null : intervId);
+  };
+
   // Verified metrics calculation based on IFC geometry or parametric dimensions
   const gfa = importedModel
     ? (importedModel.bounding_box ? importedModel.bounding_box.width * importedModel.bounding_box.height * (importedModel.storeys?.length || 2) : 508.0)
@@ -151,6 +238,8 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
   const proposedPeakRunoffLs = params.selected_interventions.includes('reflective_roof') || params.selected_interventions.includes('solar_pv')
     ? Math.round(baselinePeakRunoffLs * 0.38 * 10) / 10
     : baselinePeakRunoffLs;
+
+  const displayCost = appliedCost > 0 ? appliedCost : totalCost;
 
   return (
     <div className={`flex flex-col space-y-4 ${className}`}>
@@ -332,6 +421,9 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
               isBaseline={false}
               showInterventions={true}
               showProposedInterventions={true}
+              structuredInterventions={appliedInterventions}
+              selectedInterventionId={selectedInterventionId}
+              isolatedInterventionId={isolatedInterventionId}
               viewerMode={sharedViewerMode}
               onViewerModeChange={setSharedViewerMode}
               label={importedModel ? `PROPOSED DESIGN • ${importedModel.building_name || 'BIM Twin'} + Upgrades` : 'PROPOSED DESIGN • Upgraded BIM'}
@@ -343,12 +435,28 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
               <span className="font-medium text-emerald-800 flex items-center space-x-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span>
-                  {params.selected_interventions.length > 0
-                    ? `${params.selected_interventions.length} upgrades applied to geometry`
-                    : 'No upgrades selected'}
+                  {appliedCount > 0
+                    ? `${appliedCount} upgrade${appliedCount > 1 ? 's' : ''} validated & applied to 3D geometry`
+                    : 'No upgrades applied'}
+                  {rejectedCount > 0 && (
+                    <span className="text-rose-600 font-semibold ml-1">
+                      ({rejectedCount} rejected)
+                    </span>
+                  )}
                 </span>
               </span>
-              <span className="font-mono font-bold text-charcoal-900">{formatINR(totalCost)}</span>
+              <div className="flex items-center space-x-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowLogsDrawer(!showLogsDrawer)}
+                  className="text-[11px] font-semibold text-charcoal-700 hover:text-charcoal-900 bg-stone-100 hover:bg-stone-200 px-2 py-0.5 rounded border border-charcoal-300 transition-all flex items-center space-x-1"
+                >
+                  <Info className="w-3 h-3 text-charcoal-600" />
+                  <span>Validation Log</span>
+                  {showLogsDrawer ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+                <span className="font-mono font-bold text-charcoal-900">{formatINR(displayCost)}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -360,6 +468,9 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
             isBaseline={false}
             showInterventions={true}
             showProposedInterventions={true}
+            structuredInterventions={appliedInterventions}
+            selectedInterventionId={selectedInterventionId}
+            isolatedInterventionId={isolatedInterventionId}
             isOverlayMode={true}
             viewerMode={sharedViewerMode}
             onViewerModeChange={setSharedViewerMode}
@@ -375,6 +486,9 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
             isBaseline={comparisonMode === 'baseline'}
             showInterventions={comparisonMode === 'proposed'}
             showProposedInterventions={comparisonMode === 'proposed'}
+            structuredInterventions={appliedInterventions}
+            selectedInterventionId={selectedInterventionId}
+            isolatedInterventionId={isolatedInterventionId}
             viewerMode={sharedViewerMode}
             onViewerModeChange={setSharedViewerMode}
             label={
@@ -384,6 +498,152 @@ export const DesignComparison: React.FC<DesignComparisonProps> = ({
             }
             className="h-[480px]"
           />
+        </div>
+      )}
+
+      {/* Validation Diagnostic Logs Drawer */}
+      {showLogsDrawer && (
+        <div className="bg-stone-900 text-stone-200 p-3.5 rounded-xl border border-charcoal-700 text-xs font-mono space-y-1.5 animate-in fade-in">
+          <div className="flex items-center justify-between border-b border-charcoal-700 pb-1.5 text-stone-400 font-sans">
+            <span className="font-semibold text-emerald-400 flex items-center space-x-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Intervention Placement Validation Audit Log</span>
+            </span>
+            <button
+              onClick={() => setShowLogsDrawer(false)}
+              className="text-stone-400 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="max-h-40 overflow-y-auto space-y-1 pt-1">
+            {diagnosticLogs.map((log, idx) => (
+              <div key={idx} className="leading-tight">
+                <span className="text-emerald-500">[{idx + 1}]</span> {log}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Applied Interventions Shelf with 3D Interaction Controls */}
+      {appliedInterventions.length > 0 && (
+        <div className="bg-white p-3.5 rounded-xl border border-charcoal-200 shadow-2xs space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-700" />
+              <h4 className="text-xs font-bold uppercase tracking-wider text-charcoal-900">
+                Applied 3D Interventions ({appliedCount} Validated, {rejectedCount} Rejected)
+              </h4>
+              {isLoadingInterventions && (
+                <span className="text-[10px] text-emerald-600 animate-pulse font-medium">
+                  Validating & Synthesizing 3D...
+                </span>
+              )}
+            </div>
+            {isolatedInterventionId && (
+              <button
+                type="button"
+                onClick={() => setIsolatedInterventionId(null)}
+                className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-0.5 rounded-md border border-emerald-300 flex items-center space-x-1"
+              >
+                <span>Reset Isolation Filter</span>
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {appliedInterventions.map((interv) => {
+              const isValid = interv.validation_status === 'VALIDATED';
+              const isSelected = selectedInterventionId === interv.intervention_id || selectedInterventionId === interv.recommendation_id;
+              const isIsolated = isolatedInterventionId === interv.intervention_id || isolatedInterventionId === interv.recommendation_id;
+
+              return (
+                <div
+                  key={interv.intervention_id}
+                  className={`p-3 rounded-xl border transition-all text-xs flex flex-col justify-between ${
+                    isValid
+                      ? (isSelected
+                          ? 'border-sky-500 bg-sky-50/70 ring-1 ring-sky-400 shadow-xs'
+                          : 'border-charcoal-200 bg-white hover:border-charcoal-300')
+                      : 'border-rose-300 bg-rose-50/50'
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                        isValid
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : 'bg-rose-100 text-rose-800 border-rose-300'
+                      }`}>
+                        {isValid ? 'VALIDATED' : 'REJECTED'}
+                      </span>
+                      <span className="font-mono font-bold text-charcoal-900">
+                        {isValid ? formatINR(interv.estimated_cost) : '₹0'}
+                      </span>
+                    </div>
+
+                    <div className="font-bold text-charcoal-900 text-xs">
+                      {interv.intervention_type === 'solar_pv' ? `Solar PV (${interv.geometry_parameters?.panel_count || 12} Panels)` :
+                       interv.intervention_type === 'reflective_roof' ? 'High-Albedo Cool Roof Coating' :
+                       interv.intervention_type === 'external_shading' ? `External Shading Louvers (${interv.geometry_parameters?.window_apertures || 4} Windows)` :
+                       interv.intervention_type === 'roof_insulation' ? '50mm Over-Deck Roof Insulation' :
+                       interv.intervention_type === 'rainwater_harvesting' ? 'Rainwater Cistern & Gutter Drop' :
+                       interv.intervention_type}
+                    </div>
+
+                    {isValid ? (
+                      <div className="text-[11px] text-charcoal-500 leading-snug">
+                        {interv.calculation_method}
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-rose-700 font-medium leading-snug">
+                        {interv.rejection_reason || 'Placement constraints violated.'}
+                      </div>
+                    )}
+                  </div>
+
+                  {isValid && (
+                    <div className="mt-2.5 pt-2 border-t border-charcoal-100 flex items-center justify-between text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleHighlight(interv.recommendation_id)}
+                        className={`px-2 py-1 rounded font-medium transition-all flex items-center space-x-1 ${
+                          isSelected
+                            ? 'bg-sky-600 text-white'
+                            : 'text-charcoal-600 hover:text-charcoal-900 hover:bg-stone-100'
+                        }`}
+                      >
+                        <Eye className="w-3 h-3" />
+                        <span>{isSelected ? 'Highlighted' : 'Highlight 3D'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleIsolate(interv.recommendation_id)}
+                        className={`px-2 py-1 rounded font-medium transition-all ${
+                          isIsolated
+                            ? 'bg-emerald-700 text-white'
+                            : 'text-charcoal-600 hover:text-charcoal-900 hover:bg-stone-100'
+                        }`}
+                      >
+                        {isIsolated ? 'Isolated' : 'Isolate'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveIntervention(interv.recommendation_id)}
+                        className="text-stone-400 hover:text-rose-600 p-1 rounded transition-colors"
+                        title="Remove upgrade"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

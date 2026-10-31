@@ -25,6 +25,7 @@ import {
 import { GeotechnicalSiteProfile, BoreholeRecord, SoilStrataLayer } from '../types/geotechnical';
 import { fetchGeotechnicalProfileApi } from '../lib/api';
 import { Intervention3DComponent } from '../types/rainwater';
+import { StructuredIntervention } from '../types/recommendations';
 import {
   BuildingFurnishingPlan,
   FurnitureItem,
@@ -64,6 +65,10 @@ interface BuildingViewerProps {
   selectedInterventionComponentId?: string | null;
   showProposedInterventions?: boolean;
   onToggleProposedInterventions?: (show: boolean) => void;
+  // Structured Interventions with Placement Validation
+  structuredInterventions?: StructuredIntervention[] | null;
+  selectedInterventionId?: string | null;
+  isolatedInterventionId?: string | null;
   // Camera Synchronization & Overlay Mode
   onCameraChange?: (cam: { position: [number, number, number]; target: [number, number, number] }) => void;
   externalCamera?: { position: [number, number, number]; target: [number, number, number] } | null;
@@ -181,6 +186,9 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
   selectedInterventionComponentId,
   showProposedInterventions: propShowProposedInterventions = true,
   onToggleProposedInterventions,
+  structuredInterventions,
+  selectedInterventionId,
+  isolatedInterventionId,
   onCameraChange,
   externalCamera,
   isOverlayMode = false,
@@ -1089,6 +1097,27 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
             elemOpacity = 1.0;
           }
 
+          // Proposed Design: Reflective Cool Roof finish on targeted terrace elements
+          const hasCoolRoofIntervention = !isBaseline && showInterventions && (
+            (params.selected_interventions && params.selected_interventions.includes('reflective_roof')) ||
+            (structuredInterventions && structuredInterventions.some((si) => si.intervention_type === 'reflective_roof' && si.validation_status === 'VALIDATED'))
+          );
+          let isCoolRoofElem = false;
+          if (hasCoolRoofIntervention) {
+            isCoolRoofElem = elem.element_type === 'IfcRoof' || Boolean(
+              elem.element_type === 'IfcSlab' && (
+                elem.name?.toLowerCase().includes('roof') ||
+                elem.name?.toLowerCase().includes('terrace') ||
+                (elem.bounding_box && elem.bounding_box.min_z >= 2.5)
+              )
+            );
+            if (isCoolRoofElem) {
+              elemColor = 0xf8fafc; // High-albedo titanium white cool roof
+              elemOpacity = 1.0;
+              elemTransparent = false;
+            }
+          }
+
           let finalColor = elemColor;
           let finalTransparent = elemTransparent;
           let finalOpacity = elemOpacity;
@@ -1100,8 +1129,8 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
 
           const material = new THREE.MeshStandardMaterial({
             color: finalColor,
-            roughness: style.roughness !== undefined ? style.roughness : 0.6,
-            metalness: style.metalness !== undefined ? style.metalness : 0.1,
+            roughness: isCoolRoofElem ? 0.2 : (style.roughness !== undefined ? style.roughness : 0.6),
+            metalness: isCoolRoofElem ? 0.05 : (style.metalness !== undefined ? style.metalness : 0.1),
             transparent: finalTransparent,
             opacity: finalOpacity,
             wireframe: visualPreset === 'technical_inspection' ? true : wireframeMode,
@@ -1480,7 +1509,7 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     }
   }, [showSubsurface, showBoreholes, showGroundwater, showFloodOverlay, geotechnicalProfile, selectedBorehole]);
 
-  // 3D Proposed Rainwater Interventions Visualization
+  // 3D Proposed Physical Interventions Visualization (Synchronized with Structured Intervention Contract)
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -1503,119 +1532,188 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
       }
     }
 
-    let activeComponents: Intervention3DComponent[] = proposedInterventions || [];
-    if (
-      activeComponents.length === 0 &&
-      showInterventions &&
-      !isBaseline &&
+    // Baseline views must NEVER display interventions
+    if (isBaseline || !showInterventions || !propShowProposedInterventions) {
+      return;
+    }
+
+    let activeComponents: Intervention3DComponent[] = [];
+
+    // 1. Primary Source: Validated Structured Interventions Contract
+    if (structuredInterventions && structuredInterventions.length > 0) {
+      structuredInterventions.forEach((interv) => {
+        if (interv.validation_status === 'VALIDATED') {
+          // Check isolation filter
+          if (
+            !isolatedInterventionId ||
+            isolatedInterventionId === interv.intervention_id ||
+            isolatedInterventionId === interv.recommendation_id
+          ) {
+            if (interv.components_3d && interv.components_3d.length > 0) {
+              activeComponents.push(...interv.components_3d);
+            }
+          }
+        }
+      });
+    } else if (proposedInterventions && proposedInterventions.length > 0) {
+      activeComponents = [...proposedInterventions];
+    } else if (
       params.selected_interventions &&
       params.selected_interventions.length > 0 &&
       importedModel?.bounding_box
     ) {
+      // Direct geometric fallback synthesis if API response is still pending
       const bbox = importedModel.bounding_box;
-      const rooftopZ = bbox.depth || bbox.max_z || 10.0;
+      const roofZ = (importedModel.elements.find(e => (e.element_type === 'IfcRoof' || e.element_type === 'IfcSlab') && (e.bounding_box && e.bounding_box.min_z >= 2.5))?.bounding_box?.max_z) || 3.8;
       const w = bbox.width || 14.0;
-      const l = bbox.height || 16.0;
-
-      activeComponents = [];
+      const l = bbox.height || 10.0;
       const selectedIds = params.selected_interventions as string[];
-      if (selectedIds.includes('solar_pv') || selectedIds.includes('reflective_roof')) {
+
+      if (selectedIds.includes('solar_pv')) {
+        const rows = 3;
+        const cols = 4;
+        let count = 0;
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            count++;
+            activeComponents.push({
+              component_id: `auto-solar-panel-${count}`,
+              component_type: 'solar_pv_panel',
+              name: `Rooftop PV Table #${count}`,
+              material: 'Tier-1 Monocrystalline Silicon',
+              color_hex: '#1e3a8a',
+              position: [bbox.min_x + 2.0 + c * 2.6, bbox.min_y + 1.8 + r * 2.2, roofZ + 0.25],
+              dimensions: [2.2, 1.2, 0.05],
+              geometry_type: 'box',
+              specification: '540W Tier-1 Mono PERC module array',
+            });
+            activeComponents.push({
+              component_id: `auto-solar-strut-${count}`,
+              component_type: 'solar_mounting_rack',
+              name: `Ballasted Steel Rack #${count}`,
+              material: 'Galvanized Steel',
+              color_hex: '#64748b',
+              position: [bbox.min_x + 2.0 + c * 2.6, bbox.min_y + 1.8 + r * 2.2, roofZ + 0.1],
+              dimensions: [1.8, 0.8, 0.18],
+              geometry_type: 'box',
+              specification: 'Ballasted A-frame rack',
+            });
+          }
+        }
+      }
+
+      if (selectedIds.includes('reflective_roof')) {
         activeComponents.push({
-          component_id: 'auto-solar-array-01',
-          component_type: 'solar_pv_array',
-          name: 'High-Efficiency Monocrystalline Rooftop PV Array',
-          material: 'Monocrystalline Silicon & Anodized Aluminum',
-          dimensions: [w * 0.7, 0.12, l * 0.6],
-          position: [0.0, 0.0, rooftopZ + 0.15],
-          color_hex: '#1e3a8a',
-          is_subsurface: false,
+          component_id: 'auto-cool-roof-membrane',
+          component_type: 'cool_roof_membrane',
+          name: 'High-Albedo Reflective Cool Roof Coating (SRI 104)',
+          material: 'Pure White Polyurethane Membrane',
+          color_hex: '#f8fafc',
+          position: [bbox.center_x, bbox.center_y, roofZ + 0.02],
+          dimensions: [w - 0.1, l - 0.1, 0.03],
           geometry_type: 'box',
-          specification: `${Math.round((w * l * 0.5) / 6.0)} kWp capacity, 21.5% cell efficiency`,
+          specification: 'High-reflectance waterproofing membrane',
         });
       }
-      if (selectedIds.includes('rainwater_harvesting') || selectedIds.includes('solar_pv')) {
-        activeComponents.push({
-          component_id: 'auto-rwh-tank-01',
-          component_type: 'storage_tank',
-          name: 'Rainwater Storage Cistern (10 kL)',
-          material: 'Food-grade HDPE',
-          dimensions: [1.2, 2.2, 1.2],
-          position: [w / 2 + 1.8, -l / 4, 1.1],
-          color_hex: '#0284c7',
-          is_subsurface: false,
-          geometry_type: 'cylinder',
-          specification: '10,000 Liters storage with dual stage mechanical filtration',
-        });
-        activeComponents.push({
-          component_id: 'auto-rwh-downspout-01',
-          component_type: 'gutter_downspout',
-          name: 'First-Flush Gutter Downspout',
-          material: 'uPVC 110mm Pipe',
-          dimensions: [0.08, rooftopZ, 0.08],
-          position: [w / 2 + 0.3, -l / 4, rooftopZ / 2],
-          color_hex: '#0369a1',
-          is_subsurface: false,
-          geometry_type: 'cylinder',
-          specification: '110mm diameter with automated leaf-separator diverter',
-        });
-      }
+
       if (selectedIds.includes('external_shading')) {
+        const winElements = importedModel.elements.filter(
+          e => e.element_type.toLowerCase() === 'ifcwindow' || (e.name || '').toLowerCase().includes('window')
+        );
+        winElements.forEach((win, idx) => {
+          if (win.bounding_box) {
+            const wb = win.bounding_box;
+            const isNorth = wb.center_y > bbox.center_y;
+            const posY = wb.center_y + (isNorth ? 0.28 : -0.28);
+            activeComponents.push({
+              component_id: `auto-shading-louver-${idx + 1}`,
+              component_type: 'window_louvers',
+              name: `Window Louver Shading #${idx + 1}`,
+              material: 'Extruded Architectural Aluminum',
+              color_hex: '#64748b',
+              position: [wb.center_x, posY, wb.max_z + 0.08],
+              dimensions: [wb.width + 0.25, 0.55, 0.08],
+              geometry_type: 'box',
+              specification: '550mm exterior cantilevered sun-shading visor',
+            });
+          }
+        });
+      }
+
+      if (selectedIds.includes('rainwater_harvesting')) {
         activeComponents.push({
-          component_id: 'auto-shading-louvers-01',
-          component_type: 'window_louvers',
-          name: 'Solar Shading Louver Grille',
-          material: 'Extruded Architectural Aluminum',
-          dimensions: [w * 0.8, 0.05, 0.6],
-          position: [0.0, l / 2 + 0.35, rooftopZ * 0.65],
-          color_hex: '#78716c',
-          is_subsurface: false,
+          component_id: 'auto-rwh-storage-tank',
+          component_type: 'storage_tank',
+          name: 'Rainwater Cistern (10 kL)',
+          material: 'Food-grade HDPE',
+          color_hex: '#0284c7',
+          position: [bbox.max_x + 1.8, bbox.min_y + 1.8, bbox.min_z + 1.15],
+          dimensions: [1.1, 1.1, 2.2],
+          geometry_type: 'cylinder',
+          specification: '10,000 Liters modular cylindrical storage tank',
+        });
+        activeComponents.push({
+          component_id: 'auto-rwh-gutter-north',
+          component_type: 'gutter',
+          name: 'North Roof Gutter',
+          material: 'uPVC 180mm',
+          color_hex: '#475569',
+          position: [bbox.center_x, bbox.max_y + 0.12, roofZ + 0.05],
+          dimensions: [w + 0.2, 0.18, 0.15],
           geometry_type: 'box',
-          specification: '600mm overhang depth angled at 45 deg solar cutoff',
+          specification: '180mm uPVC gutter',
         });
       }
     }
 
-    if (!showProposedRwh || activeComponents.length === 0) {
-      if (groundRef.current) {
-        const gMat = groundRef.current.material as THREE.MeshStandardMaterial;
-        gMat.transparent = false;
-        gMat.opacity = 1.0;
-      }
+    if (activeComponents.length === 0) {
       return;
     }
 
-    const hasSubsurface = activeComponents.some((c) => c.is_subsurface);
-    if (groundRef.current) {
-      const gMat = groundRef.current.material as THREE.MeshStandardMaterial;
-      if (hasSubsurface) {
-        gMat.transparent = true;
-        gMat.opacity = 0.65;
-      } else {
-        gMat.transparent = false;
-        gMat.opacity = 1.0;
-      }
+    // Set group orientation and position to match IFC coordinate system
+    const isUpright = Boolean(importedModel && importedModel.bounding_box);
+    if (isUpright && importedModel?.bounding_box) {
+      const bbox = importedModel.bounding_box;
+      group.rotation.x = -Math.PI / 2;
+      group.position.set(-bbox.center_x, -bbox.min_z, bbox.center_y);
+    } else {
+      group.rotation.x = 0;
+      group.position.set(0, 0, 0);
     }
 
     activeComponents.forEach((comp) => {
       const isSelected =
         (selectedInterventionComp && selectedInterventionComp.component_id === comp.component_id) ||
-        (selectedInterventionComponentId === comp.component_id);
+        (selectedInterventionComponentId === comp.component_id) ||
+        Boolean(
+          selectedInterventionId &&
+          (comp.component_id.toLowerCase().includes(selectedInterventionId.toLowerCase()) ||
+           comp.component_type.toLowerCase().includes(selectedInterventionId.toLowerCase()))
+        );
 
       const colorInt = parseInt(comp.color_hex.replace('#', '0x'), 16) || 0x0284c7;
 
       if (comp.geometry_type === 'cylinder') {
         const radius = Math.max(0.04, comp.dimensions[0]);
-        const height = Math.max(0.1, comp.dimensions[1]);
-        const geo = new THREE.CylinderGeometry(radius, radius, height, 24);
+        const height = Math.max(0.1, comp.dimensions[2] || comp.dimensions[1]);
+        const geo = new THREE.CylinderGeometry(radius, radius, height, 32);
+        if (isUpright) {
+          geo.rotateX(Math.PI / 2);
+        }
+
         const mat = new THREE.MeshStandardMaterial({
           color: colorInt,
           roughness: 0.35,
           metalness: 0.25,
           emissive: isSelected ? 0x0284c7 : 0x000000,
-          emissiveIntensity: isSelected ? 0.65 : 0.0,
+          emissiveIntensity: isSelected ? 0.85 : 0.0,
         });
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(comp.position[0], comp.position[2], comp.position[1]);
+        if (isUpright) {
+          mesh.position.set(comp.position[0], comp.position[1], comp.position[2]);
+        } else {
+          mesh.position.set(comp.position[0], comp.position[2], comp.position[1]);
+        }
         mesh.castShadow = !comp.is_subsurface;
         mesh.receiveShadow = true;
         mesh.userData = { isIntervention: true, intervention: comp, componentId: comp.component_id };
@@ -1625,30 +1723,63 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
         if (comp.component_type === 'storage_tank' && !comp.is_subsurface) {
           const padRadius = radius * 1.15;
           const padHeight = 0.15;
-          const padGeo = new THREE.CylinderGeometry(padRadius, padRadius, padHeight, 24);
+          const padGeo = new THREE.CylinderGeometry(padRadius, padRadius, padHeight, 32);
+          if (isUpright) padGeo.rotateX(Math.PI / 2);
           const padMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85 });
           const padMesh = new THREE.Mesh(padGeo, padMat);
-          padMesh.position.set(comp.position[0], Math.max(0.075, comp.position[2] - height / 2.0 - padHeight / 2.0), comp.position[1]);
+          if (isUpright) {
+            padMesh.position.set(comp.position[0], comp.position[1], Math.max(0.075, comp.position[2] - height / 2.0));
+          } else {
+            padMesh.position.set(comp.position[0], Math.max(0.075, comp.position[2] - height / 2.0), comp.position[1]);
+          }
           padMesh.receiveShadow = true;
           group.add(padMesh);
         }
       } else {
-        // Box geometry: dimensions = [width_x, height_y, length_z]
+        // Box geometry: dimensions = [dimX, dimY, dimZ]
         const dimX = Math.max(0.05, comp.dimensions[0]);
         const dimY = Math.max(0.05, comp.dimensions[1]);
-        const dimZ = Math.max(0.05, comp.dimensions[2]);
+        const dimZ = Math.max(0.02, comp.dimensions[2]);
         const geo = new THREE.BoxGeometry(dimX, dimY, dimZ);
+
+        let roughness = 0.5;
+        let metalness = 0.2;
+        let opacity = 1.0;
+        let transparent = Boolean(comp.is_subsurface);
+
+        if (comp.component_type === 'solar_pv_panel') {
+          roughness = 0.2;
+          metalness = 0.6;
+        } else if (comp.component_type === 'cool_roof_membrane') {
+          roughness = 0.15;
+          metalness = 0.05;
+        } else if (comp.component_type === 'solar_mounting_rack') {
+          roughness = 0.4;
+          metalness = 0.8;
+        } else if (comp.component_type === 'window_louvers') {
+          roughness = 0.35;
+          metalness = 0.7;
+        }
+
         const mat = new THREE.MeshStandardMaterial({
           color: colorInt,
-          roughness: 0.5,
-          metalness: 0.15,
-          transparent: Boolean(comp.is_subsurface),
-          opacity: comp.is_subsurface ? 0.82 : 1.0,
+          roughness,
+          metalness,
+          transparent,
+          opacity: comp.is_subsurface ? 0.8 : opacity,
           emissive: isSelected ? 0x0284c7 : 0x000000,
-          emissiveIntensity: isSelected ? 0.65 : 0.0,
+          emissiveIntensity: isSelected ? 0.85 : 0.0,
         });
+
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(comp.position[0], comp.position[2], comp.position[1]);
+        if (isUpright) {
+          mesh.position.set(comp.position[0], comp.position[1], comp.position[2]);
+          if (comp.component_type === 'solar_pv_panel') {
+            mesh.rotation.x = -15 * Math.PI / 180;
+          }
+        } else {
+          mesh.position.set(comp.position[0], comp.position[2], comp.position[1]);
+        }
         mesh.castShadow = !comp.is_subsurface;
         mesh.receiveShadow = true;
         mesh.userData = { isIntervention: true, intervention: comp, componentId: comp.component_id };
@@ -1657,28 +1788,23 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
         // Edge wireframe for clean definition
         const edges = new THREE.EdgesGeometry(geo);
         const lineMat = new THREE.LineBasicMaterial({
-          color: isSelected ? 0x0284c7 : (comp.is_subsurface ? 0x0369a1 : 0x1e293b),
+          color: isSelected ? 0x38bdf8 : (comp.component_type === 'solar_pv_panel' ? 0x94a3b8 : (comp.is_subsurface ? 0x0369a1 : 0x334155)),
           transparent: true,
-          opacity: 0.65,
+          opacity: 0.75,
         });
         const line = new THREE.LineSegments(edges, lineMat);
         line.position.copy(mesh.position);
+        line.rotation.copy(mesh.rotation);
         group.add(line);
-
-        // If subsurface underground cistern, add surface manhole hatch
-        if (comp.is_subsurface && comp.component_type === 'storage_tank') {
-          const hatchGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.08, 16);
-          const hatchMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6, metalness: 0.6 });
-          const hatchMesh = new THREE.Mesh(hatchGeo, hatchMat);
-          hatchMesh.position.set(comp.position[0], 0.04, comp.position[1]);
-          hatchMesh.userData = { isIntervention: true, intervention: comp, componentId: comp.component_id };
-          group.add(hatchMesh);
-        }
       }
     });
   }, [
+    structuredInterventions,
+    selectedInterventionId,
+    isolatedInterventionId,
     proposedInterventions,
     showProposedRwh,
+    propShowProposedInterventions,
     selectedInterventionComp,
     selectedInterventionComponentId,
     showInterventions,

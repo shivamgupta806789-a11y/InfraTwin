@@ -3,6 +3,8 @@ import {
   RecommendationResponse,
   EstimateResponse,
   ApiHealthResponse,
+  AppliedInterventionsRequest,
+  AppliedInterventionsResponse,
 } from '../types/recommendations';
 import {
   BuildingModel,
@@ -690,6 +692,25 @@ export async function fetchFurnitureCatalogApi(): Promise<{ categories: Furnitur
     throw new ApiError(data?.detail || 'Failed to fetch furniture catalog', response.status);
   }
   return data;
+}
+
+export async function generateAppliedInterventionsApi(
+  request: AppliedInterventionsRequest
+): Promise<AppliedInterventionsResponse> {
+  const modelIdPart = request.model_id ? encodeURIComponent(request.model_id) : 'sample-office-twin';
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/models/${modelIdPart}/interventions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to generate applied interventions', response.status);
+  }
+  return data as AppliedInterventionsResponse;
 }
 
 export { ApiError, API_BASE_URL };

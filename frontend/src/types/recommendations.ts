@@ -1,4 +1,46 @@
 import { InterventionId } from './building';
+import { Intervention3DComponent } from './rainwater';
+
+export interface StructuredIntervention {
+  intervention_id: string;
+  recommendation_id: string;
+  intervention_type: string;
+  target_element_ids: string[];
+  target_floor?: string | null;
+  geometry_parameters: Record<string, any>;
+  material_parameters: Record<string, any>;
+  world_position: [number, number, number];
+  dimensions: [number, number, number];
+  orientation: Record<string, number>;
+  estimated_cost: number;
+  expected_benefit: Record<string, any>;
+  calculation_method: string;
+  assumptions: string[];
+  validation_status: 'VALIDATED' | 'REJECTED' | 'PARTIAL';
+  rejection_reason?: string | null;
+  components_3d: Intervention3DComponent[];
+}
+
+export interface AppliedInterventionsRequest {
+  model_id?: string | null;
+  selected_intervention_ids: string[];
+  budget_inr?: number;
+  width_m?: number;
+  length_m?: number;
+  floors?: number;
+  floor_height_m?: number;
+  window_count?: number;
+}
+
+export interface AppliedInterventionsResponse {
+  model_id?: string | null;
+  interventions: StructuredIntervention[];
+  total_applied_cost: number;
+  applied_count: number;
+  rejected_count: number;
+  diagnostic_logs: string[];
+  provenance: string;
+}
 
 export interface InterventionItem {
   id: InterventionId;

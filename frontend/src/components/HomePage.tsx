@@ -6,9 +6,6 @@ import {
   Globe,
   Award,
   ArrowRight,
-  TrendingDown,
-  ShieldCheck,
-  Zap,
   MapPin,
   Calendar,
   Compass,
@@ -85,45 +82,6 @@ export const HomePage: React.FC<HomePageProps> = ({
               <span>2D Drawing to 3D</span>
             </button>
           </div>
-        </div>
-      </section>
-
-      {/* Platform Key Metrics Strip */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-xl border border-charcoal-200 shadow-2xs space-y-1">
-          <div className="flex items-center justify-between text-charcoal-500 text-xs font-medium">
-            <span>Operational Carbon Delta</span>
-            <TrendingDown className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className="text-xl font-bold font-mono text-charcoal-900">-42.5%</div>
-          <div className="text-[11px] text-emerald-700 font-medium">CEA India Grid baseline v19 offset</div>
-        </div>
-
-        <div className="bg-white p-4 rounded-xl border border-charcoal-200 shadow-2xs space-y-1">
-          <div className="flex items-center justify-between text-charcoal-500 text-xs font-medium">
-            <span>Renewable Solar Fraction</span>
-            <Zap className="w-4 h-4 text-amber-500" />
-          </div>
-          <div className="text-xl font-bold font-mono text-charcoal-900">54.8%</div>
-          <div className="text-[11px] text-charcoal-500">Rooftop Monocrystalline PERC</div>
-        </div>
-
-        <div className="bg-white p-4 rounded-xl border border-charcoal-200 shadow-2xs space-y-1">
-          <div className="flex items-center justify-between text-charcoal-500 text-xs font-medium">
-            <span>Subsurface Stratigraphy</span>
-            <Compass className="w-4 h-4 text-blue-600" />
-          </div>
-          <div className="text-xl font-bold font-mono text-charcoal-900">4 Strata Layers</div>
-          <div className="text-[11px] text-charcoal-500">3 Core Boreholes active</div>
-        </div>
-
-        <div className="bg-white p-4 rounded-xl border border-charcoal-200 shadow-2xs space-y-1">
-          <div className="flex items-center justify-between text-charcoal-500 text-xs font-medium">
-            <span>IFC Model Quality</span>
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className="text-xl font-bold font-mono text-charcoal-900">98.4%</div>
-          <div className="text-[11px] text-emerald-700 font-medium">Zero geometric coordinate collisions</div>
         </div>
       </section>
 

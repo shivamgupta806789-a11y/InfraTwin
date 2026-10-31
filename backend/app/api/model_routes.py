@@ -12,8 +12,13 @@ from app.models.digital_twin import (
     EsgAssessmentReport,
     BuildingIntelligenceReport,
 )
+from app.models.recommendations import (
+    AppliedInterventionsRequest,
+    AppliedInterventionsResponse,
+)
 from app.services.ifc_parser import IfcParserService
 from app.services.model_store import ModelStore
+from app.services.intervention_service import InterventionService
 
 router = APIRouter(prefix="/api/v1/models", tags=["BIM & Digital Twin"])
 
@@ -219,3 +224,25 @@ async def get_model_parametric_baseline(model_id: str):
             detail=f"Model '{model_id}' was not found."
         )
     return baseline
+
+@router.post("/{model_id}/interventions", response_model=AppliedInterventionsResponse)
+async def generate_model_interventions(
+    model_id: str,
+    request: AppliedInterventionsRequest
+):
+    """
+    Generates structured interventions with placement validation and 3D geometry
+    for a specific model ID.
+    """
+    req_copy = request.model_copy()
+    req_copy.model_id = model_id
+    return InterventionService.generate_applied_interventions(req_copy)
+
+@router.post("/interventions/generate", response_model=AppliedInterventionsResponse)
+async def generate_interventions(
+    request: AppliedInterventionsRequest
+):
+    """
+    Generates structured interventions with placement validation and 3D geometry.
+    """
+    return InterventionService.generate_applied_interventions(request)
