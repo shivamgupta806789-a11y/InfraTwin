@@ -27,6 +27,18 @@ import { CityModel, CityBuildingSummary } from '../types/city';
 import { SustainabilityAuditReport } from '../types/sustainability';
 import { ScenarioComparisonReport } from '../types/scenarios';
 import { EnergyPredictionResponse, ParetoOptimizationResponse } from '../types/ml_energy';
+import {
+  RainwaterRecommendationReport,
+  BuildingUnifiedFeatures,
+  LocationClimateProfile,
+} from '../types/rainwater';
+import {
+  BuildingFurnishingPlan,
+  FurnitureItem,
+  FurnitureUpdateRequest,
+  FurnitureAddRequest,
+  FurnitureCatalogCategory,
+} from '../types/furniture';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = 8000;
@@ -43,23 +55,27 @@ class ApiError extends Error {
   }
 }
 
-async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    const defaultHeaders: Record<string, string> = {
+      Accept: 'application/json',
+      ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
+    };
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
       headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
+        ...defaultHeaders,
         ...(options.headers || {}),
       },
     });
     return response;
   } catch (error: any) {
     if (error.name === 'AbortError') {
-      throw new ApiError(`Request to ${url} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new ApiError(`Request to ${url} timed out after ${timeoutMs / 1000}s`);
     }
     throw new ApiError(`Network error connecting to API: ${error.message || 'Server unreachable'}`);
   } finally {
@@ -391,6 +407,58 @@ export async function fetchCityBuildingApi(buildingId: string): Promise<CityBuil
   return data as CityBuildingSummary;
 }
 
+export async function importCityFileApi(
+  file: File,
+  districtName?: string,
+  districtType: string = 'Commercial Center'
+): Promise<CityModel> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (districtName && districtName.trim()) {
+    formData.append('district_name', districtName.trim());
+  }
+  formData.append('district_type', districtType);
+
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/city/import-file`, {
+    method: 'POST',
+    body: formData,
+  }, 45000);
+
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to import city/district file', response.status);
+  }
+  return data as CityModel;
+}
+
+export async function restoreSampleCityApi(): Promise<CityModel> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/city/restore-sample`, {
+    method: 'POST',
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to restore default sample city', response.status);
+  }
+  return data as CityModel;
+}
+
+export async function fetchCitySupportedFormatsApi(): Promise<Record<string, string>> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/city/supported-formats`, {
+    method: 'GET',
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    return {
+      '.geojson': 'GeoJSON FeatureCollection',
+      '.cityjson': 'CityJSON 3D Model',
+      '.zip': 'Shapefile Archive (.shp, .shx, .dbf)',
+      '.gpkg': 'GeoPackage Database',
+      '.dxf': 'AutoCAD Drawing Exchange Format',
+    };
+  }
+  return data as Record<string, string>;
+}
+
 export async function fetchSustainabilityReportApi(
   targetEntityId: string = 'sample-office-twin',
   level: string = 'building',
@@ -449,6 +517,179 @@ export async function fetchParetoOptimizationApi(
     throw new ApiError(data?.detail || 'Failed to fetch Pareto optimization alternatives', response.status);
   }
   return data as ParetoOptimizationResponse;
+}
+
+export async function fetchRainwaterRecommendationsApi(
+  buildingId: string = 'sample-office-twin',
+  latitude?: number,
+  longitude?: number,
+  buildingType?: string,
+  occupancy?: number
+): Promise<RainwaterRecommendationReport> {
+  const params = new URLSearchParams();
+  params.append('building_id', buildingId);
+  if (latitude != null) params.append('latitude', latitude.toString());
+  if (longitude != null) params.append('longitude', longitude.toString());
+  if (buildingType) params.append('building_type', buildingType);
+  if (occupancy != null) params.append('occupancy', occupancy.toString());
+
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/rainwater/recommendations?${params.toString()}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch rainwater recommendations', response.status);
+  }
+  return data as RainwaterRecommendationReport;
+}
+
+export async function fetchRainwaterFeaturesApi(
+  buildingId: string = 'sample-office-twin',
+  latitude?: number,
+  longitude?: number
+): Promise<BuildingUnifiedFeatures> {
+  const params = new URLSearchParams();
+  params.append('model_id', buildingId);
+  if (latitude != null) params.append('latitude', latitude.toString());
+  if (longitude != null) params.append('longitude', longitude.toString());
+
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/rainwater/features?${params.toString()}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch building unified features', response.status);
+  }
+  return data as BuildingUnifiedFeatures;
+}
+
+export async function fetchRainwaterClimateApi(
+  latitude: number = 28.6139,
+  longitude: number = 77.2090
+): Promise<LocationClimateProfile> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/rainwater/climate-profile?latitude=${latitude}&longitude=${longitude}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch location climate profile', response.status);
+  }
+  return data as LocationClimateProfile;
+}
+
+export async function fetchRainwaterMlMetricsApi(): Promise<any> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/rainwater/ml-metrics`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch ML model evaluation metrics', response.status);
+  }
+  return data;
+}
+
+export async function fetchBuildingFurnishingPlanApi(
+  modelId: string,
+  autoGenerate: boolean = true
+): Promise<BuildingFurnishingPlan> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/furniture/plan/${encodeURIComponent(modelId)}?auto_generate=${autoGenerate}`,
+    { method: 'GET' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch building furnishing plan', response.status);
+  }
+  return data as BuildingFurnishingPlan;
+}
+
+export async function generateBuildingFurnishingPlanApi(
+  modelId: string,
+  customRoomTypes?: Record<string, string>,
+  forceRegenerate: boolean = true
+): Promise<BuildingFurnishingPlan> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/furniture/plan/${encodeURIComponent(modelId)}/generate?force_regenerate=${forceRegenerate}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(customRoomTypes || {}),
+    }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to generate building furnishing plan', response.status);
+  }
+  return data as BuildingFurnishingPlan;
+}
+
+export async function updateFurnitureItemApi(
+  modelId: string,
+  furnitureId: string,
+  update: FurnitureUpdateRequest
+): Promise<FurnitureItem> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/furniture/plan/${encodeURIComponent(modelId)}/item/${encodeURIComponent(furnitureId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to update furniture item', response.status);
+  }
+  return data as FurnitureItem;
+}
+
+export async function removeFurnitureItemApi(
+  modelId: string,
+  furnitureId: string
+): Promise<{ status: string; message: string }> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/furniture/plan/${encodeURIComponent(modelId)}/item/${encodeURIComponent(furnitureId)}`,
+    { method: 'DELETE' }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to delete furniture item', response.status);
+  }
+  return data;
+}
+
+export async function addFurnitureItemApi(
+  modelId: string,
+  request: FurnitureAddRequest
+): Promise<FurnitureItem> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/v1/furniture/plan/${encodeURIComponent(modelId)}/item`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    }
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to add furniture item', response.status);
+  }
+  return data as FurnitureItem;
+}
+
+export async function fetchFurnitureCatalogApi(): Promise<{ categories: FurnitureCatalogCategory[] }> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/furniture/catalog`, {
+    method: 'GET',
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new ApiError(data?.detail || 'Failed to fetch furniture catalog', response.status);
+  }
+  return data;
 }
 
 export { ApiError, API_BASE_URL };

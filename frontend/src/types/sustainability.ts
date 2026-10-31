@@ -15,6 +15,9 @@ export interface ComprehensiveRecommendation {
   time_horizon: 'immediate' | 'near_term_2026' | 'mid_term_2035' | 'long_term_2050';
   confidence: 'high' | 'medium' | 'insufficient_data';
   data_sources: string[];
+  relevant_building_feature?: string | null;
+  relevant_location_feature?: string | null;
+  contributing_datasets?: string[];
   assumptions: string[];
   missing_information: string[];
   validation_requirements: string;
@@ -27,4 +30,6 @@ export interface SustainabilityAuditReport {
   summary_counts: Record<string, number>;
   recommendations: ComprehensiveRecommendation[];
   insufficient_data_warnings: string[];
+  dataset_statuses?: Record<string, string>;
+  location_profile?: any;
 }

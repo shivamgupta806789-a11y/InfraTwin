@@ -10,7 +10,6 @@ import {
   Filter,
   Eye,
   Activity,
-  PieChart,
   SlidersHorizontal,
   Award,
   ChevronDown,
@@ -59,7 +58,6 @@ export const IntelligenceDashboardView: React.FC<IntelligenceDashboardViewProps>
   const {
     total_elements,
     element_counts_by_category,
-    material_distribution,
     model_completeness_pct,
     findings_by_severity,
     storey_distribution,
@@ -184,8 +182,8 @@ export const IntelligenceDashboardView: React.FC<IntelligenceDashboardViewProps>
         </span>
       </div>
 
-      {/* 3-Column Distribution Breakdown: Category, Material, Storey */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* 2-Column Distribution Breakdown: Category & Storey (Material provenance moved to Quality Audit) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Category Breakdown */}
         <div className="bg-white rounded-xl border border-charcoal-200 p-4 shadow-2xs space-y-3">
           <div className="flex items-center justify-between pb-2 border-b border-charcoal-100">
@@ -224,40 +222,6 @@ export const IntelligenceDashboardView: React.FC<IntelligenceDashboardViewProps>
           </div>
         </div>
 
-        {/* Material Distribution */}
-        <div className="bg-white rounded-xl border border-charcoal-200 p-4 shadow-2xs space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-charcoal-100">
-            <div className="flex items-center space-x-2">
-              <PieChart className="w-4 h-4 text-emerald-800" />
-              <h4 className="text-xs font-bold text-charcoal-900 uppercase tracking-wider">
-                Material Distribution
-              </h4>
-            </div>
-            <span className="text-[11px] font-mono text-charcoal-500">{material_distribution.length} Materials</span>
-          </div>
-
-          <div className="space-y-2 text-xs max-h-[220px] overflow-y-auto pr-1">
-            {material_distribution.map((mat) => (
-              <div key={mat.material_name} className="space-y-1">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-medium text-charcoal-800 truncate max-w-[170px]" title={mat.material_name}>
-                    {mat.material_name}
-                  </span>
-                  <span className="font-mono text-charcoal-500">
-                    {mat.approx_volume_m3 > 0 ? `${mat.approx_volume_m3} m³` : `${mat.element_count} items`} ({mat.percentage}%)
-                  </span>
-                </div>
-                <div className="w-full bg-stone-100 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="bg-emerald-700 h-1.5 rounded-full transition-all"
-                    style={{ width: `${mat.percentage}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
         {/* Storey Distribution */}
         <div className="bg-white rounded-xl border border-charcoal-200 p-4 shadow-2xs space-y-3">
           <div className="flex items-center justify-between pb-2 border-b border-charcoal-100">
@@ -289,6 +253,11 @@ export const IntelligenceDashboardView: React.FC<IntelligenceDashboardViewProps>
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="pt-2 border-t border-charcoal-100 text-[11px] text-charcoal-500 flex items-center justify-between">
+            <span>Material Provenance & Bill of Materials:</span>
+            <span className="text-emerald-800 font-semibold">Available in BIM Quality Audit tab</span>
           </div>
         </div>
       </div>

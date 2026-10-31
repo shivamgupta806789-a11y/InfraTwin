@@ -63,6 +63,7 @@ export interface BuildingModel {
   available_properties: string[];
   missing_data: string[];
   bounding_box?: BoundingBox3D | null;
+  georeferencing?: Record<string, any> | null;
   provenance_metadata: Record<string, any>;
 }
 

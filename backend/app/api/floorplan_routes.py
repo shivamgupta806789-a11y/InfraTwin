@@ -13,7 +13,7 @@ from app.services.floorplan_to_3d_service import FloorplanTo3dService
 router = APIRouter(prefix="/api/v1/floorplan", tags=["2D Floorplan to 3D"])
 
 MAX_DRAWING_BYTES = 25 * 1024 * 1024  # 25 MB limit for raster / PDF drawings
-SUPPORTED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".pdf", ".webp", ".bmp"]
+SUPPORTED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".pdf", ".webp", ".bmp", ".dxf"]
 
 
 @router.post("/extract", response_model=FloorPlanExtractionResponse)

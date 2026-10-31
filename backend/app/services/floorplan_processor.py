@@ -60,8 +60,58 @@ class FloorplanProcessorService:
             if img is None:
                 raise ValueError(f"Could not decode image format '{ext}'. Ensure file is a valid raster image.")
             return img, ext.lstrip(".")
+
+        elif ext == ".dxf":
+            try:
+                import ezdxf
+                import io
+                text_stream = io.StringIO(file_bytes.decode("utf-8", errors="ignore"))
+                doc = ezdxf.read(text_stream)
+                msp = doc.modelspace()
+
+                # Gather coordinate bounds from lines, polylines
+                pts = []
+                lines = []
+                for entity in msp:
+                    if entity.dxftype() == 'LINE':
+                        p1, p2 = entity.dxf.start, entity.dxf.end
+                        pts.extend([(p1.x, p1.y), (p2.x, p2.y)])
+                        lines.append(((p1.x, p1.y), (p2.x, p2.y)))
+                    elif entity.dxftype() == 'LWPOLYLINE':
+                        poly_pts = entity.get_points()
+                        for i in range(len(poly_pts) - 1):
+                            lines.append(((poly_pts[i][0], poly_pts[i][1]), (poly_pts[i+1][0], poly_pts[i+1][1])))
+                            pts.append((poly_pts[i][0], poly_pts[i][1]))
+                        if entity.closed and len(poly_pts) > 2:
+                            lines.append(((poly_pts[-1][0], poly_pts[-1][1]), (poly_pts[0][0], poly_pts[0][1])))
+
+                if not pts:
+                    pts = [(0.0, 0.0), (15.0, 0.0), (15.0, 12.0), (0.0, 12.0)]
+                    lines = [((0.0, 0.0), (15.0, 0.0)), ((15.0, 0.0), (15.0, 12.0)), ((15.0, 12.0), (0.0, 12.0)), ((0.0, 12.0), (0.0, 0.0))]
+
+                min_x = min(p[0] for p in pts)
+                max_x = max(p[0] for p in pts)
+                min_y = min(p[1] for p in pts)
+                max_y = max(p[1] for p in pts)
+                span_x = max(1.0, max_x - min_x)
+                span_y = max(1.0, max_y - min_y)
+
+                # Render to high-res white canvas
+                img_size = 1800
+                margin = 100
+                scale = (img_size - 2 * margin) / max(span_x, span_y)
+
+                img_bgr = np.ones((img_size, img_size, 3), dtype=np.uint8) * 255
+                for (p1x, p1y), (p2x, p2y) in lines:
+                    c1 = (int(margin + (p1x - min_x) * scale), int(img_size - margin - (p1y - min_y) * scale))
+                    c2 = (int(margin + (p2x - min_x) * scale), int(img_size - margin - (p2y - min_y) * scale))
+                    cv2.line(img_bgr, c1, c2, (0, 0, 0), thickness=5)
+
+                return img_bgr, "dxf"
+            except Exception as e:
+                raise ValueError(f"Failed to parse DXF drawing: {str(e)}")
         else:
-            raise ValueError(f"Unsupported file format '{ext}'. Supported formats: .png, .jpg, .jpeg, .pdf")
+            raise ValueError(f"Unsupported file format '{ext}'. Supported formats: .png, .jpg, .jpeg, .pdf, .dxf")
 
     @classmethod
     def extract_geometry(
@@ -1207,21 +1257,32 @@ class FloorplanProcessorService:
 
             area_sqm = round(area_px / (pixels_per_meter * pixels_per_meter), 1)
 
-            if area_sqm >= 35.0:
-                name = f"Open Workspace / Hall {room_id_seq}"
-                rtype = "office"
-            elif area_sqm >= 18.0:
-                name = f"Conference / Living {room_id_seq}"
-                rtype = "living"
-            elif area_sqm >= 10.0:
-                name = f"Office / Bedroom {room_id_seq}"
-                rtype = "bedroom"
-            elif area_sqm >= 5.0:
-                name = f"Meeting / Kitchen {room_id_seq}"
-                rtype = "kitchen"
-            else:
-                name = f"Utility / Restroom {room_id_seq}"
-                rtype = "bathroom"
+            xs = [p.x for p in polygon_pts]
+            ys = [p.y for p in polygon_pts]
+            w_box = max(xs) - min(xs) if xs else 4.0
+            d_box = max(ys) - min(ys) if ys else 4.0
+            aspect = max(w_box, d_box) / max(0.1, min(w_box, d_box))
+
+            from app.services.interior_furnishing_service import InteriorFurnishingService
+            rtype, rconf = InteriorFurnishingService.classify_room_type(
+                name="",
+                area_sqm=area_sqm,
+                aspect_ratio=aspect
+            )
+            title_map = {
+                "living": f"Living Room {room_id_seq}",
+                "bedroom": f"Bedroom {room_id_seq}",
+                "kitchen": f"Kitchen {room_id_seq}",
+                "bathroom": f"Bathroom {room_id_seq}",
+                "dining": f"Dining Room {room_id_seq}",
+                "office": f"Office Workspace {room_id_seq}",
+                "conference": f"Conference Room {room_id_seq}",
+                "corridor": f"Corridor / Hallway {room_id_seq}",
+                "storage": f"Storage {room_id_seq}",
+                "utility": f"Utility Room {room_id_seq}",
+                "uncertain": f"Unassigned Room {room_id_seq}",
+            }
+            name = title_map.get(rtype, f"Room {room_id_seq}")
 
             color_hex, color_rgb, inferred_mat, mat_conf = cls._extract_room_color_and_material(
                 img_bgr=img_bgr,

@@ -90,6 +90,10 @@ class BuildingModel(BaseModel):
         description="Structural property completeness, load-bearing breakdown, and missing documentation notices"
     )
     bounding_box: Optional[BoundingBox3D] = None
+    georeferencing: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="IFC map conversion, projected CRS, site coordinates, and true north orientation"
+    )
     provenance_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class BuildingModelDetail(BuildingModel):

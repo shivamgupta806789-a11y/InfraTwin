@@ -47,7 +47,7 @@ import { HomePage } from './components/HomePage';
 import { CityViewer } from './components/CityViewer';
 import { ScenarioIntelligenceView } from './components/ScenarioIntelligenceView';
 import { GeotechnicalIntelligenceView } from './components/GeotechnicalIntelligenceView';
-import { MLEnergyOptimizerView } from './components/MLEnergyOptimizerView';
+import { RainwaterRecommendationView } from './components/RainwaterRecommendationView';
 import { CityModel } from './types/city';
 import { fetchCityModelApi } from './lib/api';
 import {
@@ -63,20 +63,21 @@ import {
   Sparkles,
   FileImage,
   Globe,
-  Brain,
-  Calendar,
   Compass,
+  Droplets,
   Home as HomeIcon,
+  Columns,
+  Sun,
+  MapPin,
 } from 'lucide-react';
 
 export type AppNavigationMode =
   | 'home'
-  | 'city_twin'
   | 'digital_twin'
+  | 'geolocation_climate'
+  | 'city_twin'
   | 'parametric'
-  | 'scenarios'
-  | 'geotechnical'
-  | 'ml_optimizer';
+  | 'scenarios';
 
 const DEFAULT_SAMPLE_BUILDING: BuildingParams = {
   width_m: 12.0,
@@ -107,7 +108,10 @@ export const App: React.FC = () => {
   const [highlightedElementIds, setHighlightedElementIds] = useState<string[]>([]);
   const [highlightSeverity, setHighlightSeverity] = useState<string | null>(null);
   const [isTwinLoading, setIsTwinLoading] = useState<boolean>(false);
-  const [twinTab, setTwinTab] = useState<'3d_twin' | 'intelligence_dashboard' | 'quality_audit' | 'esg_assessment' | 'geolocation_climate'>('3d_twin');
+  const [twinTab, setTwinTab] = useState<'3d_twin' | 'intelligence_dashboard' | 'quality_audit' | 'design_comparison' | 'esg_assessment'>('3d_twin');
+  const [geoClimateSubTab, setGeoClimateSubTab] = useState<
+    'location_site' | 'weather_climate' | 'soil_subsurface' | 'rainwater_flood' | 'environmental_suitability'
+  >('location_site');
 
   // Filter state for Digital Twin 3D view
   const [selectedStoreyId, setSelectedStoreyId] = useState<string | null>(null);
@@ -341,12 +345,10 @@ export const App: React.FC = () => {
             <nav className="flex items-center overflow-x-auto bg-stone-100 p-1 rounded-xl border border-charcoal-200 text-xs">
               {[
                 { id: 'home', label: 'Home', icon: HomeIcon },
-                { id: 'city_twin', label: 'City District', icon: Globe },
-                { id: 'digital_twin', label: 'BIM Twin', icon: Boxes },
-                { id: 'parametric', label: 'Parametric', icon: Building2 },
-                { id: 'scenarios', label: 'Scenarios', icon: Calendar },
-                { id: 'geotechnical', label: 'Subsurface', icon: Compass },
-                { id: 'ml_optimizer', label: 'ML Energy', icon: Brain },
+                { id: 'digital_twin', label: 'BIM Digital Twin', icon: Boxes },
+                { id: 'geolocation_climate', label: 'Geolocation & Climate', icon: Globe },
+                { id: 'city_twin', label: 'City / District Twin', icon: MapPin },
+                { id: 'parametric', label: 'Parametric Explorer', icon: Building2 },
               ].map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeMode === tab.id;
@@ -465,6 +467,7 @@ export const App: React.FC = () => {
               cityModel={cityModel}
               isLoading={isCityLoading}
               onSelectBuildingForBim={handleSelectBuildingForBim}
+              onCityModelUpdated={(updated) => setCityModel(updated)}
             />
           </div>
         )}
@@ -536,6 +539,17 @@ export const App: React.FC = () => {
                     <span>Quality Audit</span>
                   </button>
                   <button
+                    onClick={() => setTwinTab('design_comparison')}
+                    className={`px-3 py-1 rounded-md font-semibold transition-all flex items-center space-x-1 ${
+                      twinTab === 'design_comparison'
+                        ? 'bg-charcoal-900 text-white shadow-2xs'
+                        : 'text-charcoal-600 hover:text-charcoal-900'
+                    }`}
+                  >
+                    <Columns className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Baseline vs Proposed</span>
+                  </button>
+                  <button
                     onClick={() => setTwinTab('esg_assessment')}
                     className={`px-3 py-1 rounded-md font-semibold transition-all flex items-center space-x-1 ${
                       twinTab === 'esg_assessment'
@@ -545,17 +559,6 @@ export const App: React.FC = () => {
                   >
                     <Scale className="w-3.5 h-3.5 text-emerald-400" />
                     <span>ESG Screening</span>
-                  </button>
-                  <button
-                    onClick={() => setTwinTab('geolocation_climate')}
-                    className={`px-3 py-1 rounded-md font-semibold transition-all flex items-center space-x-1 ${
-                      twinTab === 'geolocation_climate'
-                        ? 'bg-charcoal-900 text-white shadow-2xs'
-                        : 'text-charcoal-600 hover:text-charcoal-900'
-                    }`}
-                  >
-                    <Globe className="w-3.5 h-3.5 text-sky-400" />
-                    <span>Geolocation & Climate</span>
                   </button>
                 </div>
 
@@ -702,10 +705,11 @@ export const App: React.FC = () => {
               />
             )}
 
-            {/* Tab Body: Model Completeness & Quality Report */}
+            {/* Tab Body: Model Completeness & Quality Report (with Material Provenance & Accuracy) */}
             {twinTab === 'quality_audit' && (
               <QualityReportView
                 report={qualityReport}
+                modelDetail={importedModel}
                 isLoading={isTwinLoading}
                 onSelectElement={(elemId) => {
                   const elem = importedModel?.elements.find((e) => e.element_id === elemId) || null;
@@ -713,6 +717,23 @@ export const App: React.FC = () => {
                   setTwinTab('3d_twin');
                 }}
               />
+            )}
+
+            {/* Tab Body: Baseline vs Proposed Design Comparison */}
+            {twinTab === 'design_comparison' && (
+              <div className="space-y-4">
+                <DesignComparison
+                  params={params}
+                  totalCost={totalSelectedCost}
+                  importedModel={importedModel}
+                  onInterventionsChange={(interventions) => {
+                    setParams((prev) => ({
+                      ...prev,
+                      selected_interventions: interventions,
+                    }));
+                  }}
+                />
+              </div>
             )}
 
             {/* Tab Body: Evidence-Based ESG Screening */}
@@ -724,11 +745,6 @@ export const App: React.FC = () => {
                 onRefresh={() => loadDigitalTwinModel(currentModelId)}
                 isLoading={isTwinLoading}
               />
-            )}
-
-            {/* Tab Body: Geolocation & Environmental Intelligence */}
-            {twinTab === 'geolocation_climate' && (
-              <EnvironmentalDashboardView modelDetail={importedModel} />
             )}
           </div>
         )}
@@ -816,37 +832,122 @@ export const App: React.FC = () => {
         )}
 
         {/* ========================================================================= */}
+        {/* VIEW 3: CONSOLIDATED GEOLOCATION & CLIMATE INTELLIGENCE (5 SUB-SECTIONS) */}
+        {/* ========================================================================= */}
+        {activeMode === 'geolocation_climate' && (
+          <div className="space-y-6">
+            <div className="bg-white p-4 rounded-xl border border-charcoal-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 bg-emerald-50 text-emerald-800 rounded-lg border border-emerald-200">
+                  <Globe className="w-5 h-5 text-emerald-700" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h2 className="text-sm font-bold text-charcoal-900 tracking-tight">
+                      Geolocation & Climate Intelligence
+                    </h2>
+                    <span className="text-[10px] font-mono bg-stone-100 text-stone-700 px-2 py-0.5 rounded border border-stone-200">
+                      Open-Meteo • OpenStreetMap • USGS • NASA
+                    </span>
+                  </div>
+                  <p className="text-xs text-charcoal-500">
+                    Coupled Twin: <span className="font-semibold text-charcoal-800">{importedModel?.building_name || 'Active BIM Twin'}</span> • Location: <span className="font-mono">{(importedModel?.georeferencing?.ref_latitude || 28.6139).toFixed(4)}°N, {(importedModel?.georeferencing?.ref_longitude || 77.2090).toFixed(4)}°E</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* 5-Part Consolidated Sub-navigation Pills */}
+              <div className="flex items-center bg-stone-100 p-1 rounded-xl border border-charcoal-200 text-xs overflow-x-auto">
+                <button
+                  onClick={() => setGeoClimateSubTab('location_site')}
+                  className={`px-3 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap flex items-center space-x-1 ${
+                    geoClimateSubTab === 'location_site'
+                      ? 'bg-charcoal-900 text-white shadow-2xs'
+                      : 'text-charcoal-600 hover:text-charcoal-900'
+                  }`}
+                >
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>A) Location & Site</span>
+                </button>
+                <button
+                  onClick={() => setGeoClimateSubTab('weather_climate')}
+                  className={`px-3 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap flex items-center space-x-1 ${
+                    geoClimateSubTab === 'weather_climate'
+                      ? 'bg-charcoal-900 text-white shadow-2xs'
+                      : 'text-charcoal-600 hover:text-charcoal-900'
+                  }`}
+                >
+                  <Sun className="w-3.5 h-3.5 text-amber-500" />
+                  <span>B) Weather & Climate</span>
+                </button>
+                <button
+                  onClick={() => setGeoClimateSubTab('soil_subsurface')}
+                  className={`px-3 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap flex items-center space-x-1 ${
+                    geoClimateSubTab === 'soil_subsurface'
+                      ? 'bg-charcoal-900 text-white shadow-2xs'
+                      : 'text-charcoal-600 hover:text-charcoal-900'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5 text-stone-500" />
+                  <span>C) Soil & Subsurface</span>
+                </button>
+                <button
+                  onClick={() => setGeoClimateSubTab('rainwater_flood')}
+                  className={`px-3 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap flex items-center space-x-1 ${
+                    geoClimateSubTab === 'rainwater_flood'
+                      ? 'bg-charcoal-900 text-white shadow-2xs'
+                      : 'text-charcoal-600 hover:text-charcoal-900'
+                  }`}
+                >
+                  <Droplets className="w-3.5 h-3.5 text-sky-500" />
+                  <span>D) Rainwater & Flood</span>
+                </button>
+                <button
+                  onClick={() => setGeoClimateSubTab('environmental_suitability')}
+                  className={`px-3 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap flex items-center space-x-1 ${
+                    geoClimateSubTab === 'environmental_suitability'
+                      ? 'bg-charcoal-900 text-white shadow-2xs'
+                      : 'text-charcoal-600 hover:text-charcoal-900'
+                  }`}
+                >
+                  <Leaf className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>E) Environmental Suitability</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Sub-sections A, B, and E: Environmental & Location & Climate */}
+            {(geoClimateSubTab === 'location_site' || geoClimateSubTab === 'weather_climate' || geoClimateSubTab === 'environmental_suitability') && (
+              <EnvironmentalDashboardView modelDetail={importedModel} />
+            )}
+
+            {/* Sub-section C: Soil & Subsurface Geotechnical Inspection */}
+            {geoClimateSubTab === 'soil_subsurface' && (
+              <GeotechnicalIntelligenceView
+                latitude={importedModel?.georeferencing?.ref_latitude || 28.6139}
+                longitude={importedModel?.georeferencing?.ref_longitude || 77.2090}
+                siteId={importedModel?.site_name || 'site-001'}
+              />
+            )}
+
+            {/* Sub-section D: Rainwater Harvesting & Urban Flood Prevention */}
+            {geoClimateSubTab === 'rainwater_flood' && (
+              <RainwaterRecommendationView
+                modelId={currentModelId}
+                importedModel={importedModel}
+                params={params}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
         {/* VIEW 4: SCENARIO INTELLIGENCE & CLIMATE RESILIENCE (2026-2050) */}
         {/* ========================================================================= */}
         {activeMode === 'scenarios' && (
           <div className="space-y-6">
             <ScenarioIntelligenceView
               buildingId={currentModelId}
-            />
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* VIEW 5: GEOTECHNICAL & SUBSURFACE INTELLIGENCE */}
-        {/* ========================================================================= */}
-        {activeMode === 'geotechnical' && (
-          <div className="space-y-6">
-            <GeotechnicalIntelligenceView
-              latitude={28.6139}
-              longitude={77.2090}
-              siteId="site-001"
-            />
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* VIEW 6: ML ENERGY REGRESSION & PARETO OPTIMIZER */}
-        {/* ========================================================================= */}
-        {activeMode === 'ml_optimizer' && (
-          <div className="space-y-6">
-            <MLEnergyOptimizerView
-              modelId={currentModelId}
-              budgetInr={params.budget_inr}
             />
           </div>
         )}

@@ -16,11 +16,28 @@ import {
   ShieldAlert,
   Sun,
   CircleDot,
+  Droplets,
+  Armchair,
+  Trash2,
+  Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 import { GeotechnicalSiteProfile, BoreholeRecord, SoilStrataLayer } from '../types/geotechnical';
 import { fetchGeotechnicalProfileApi } from '../lib/api';
+import { Intervention3DComponent } from '../types/rainwater';
+import {
+  BuildingFurnishingPlan,
+  FurnitureItem,
+} from '../types/furniture';
+import {
+  fetchBuildingFurnishingPlanApi,
+  generateBuildingFurnishingPlanApi,
+  updateFurnitureItemApi,
+  removeFurnitureItemApi,
+} from '../lib/api';
+import { Furniture3DBuilder } from '../lib/furniture3d';
 
-export type ViewerMode = 'skeleton' | 'exterior' | 'interior';
+export type ViewerMode = 'skeleton' | 'exterior' | 'interior' | 'floor_by_floor';
 export type VisualPreset = 'arch_white' | 'concrete' | 'warm_interior' | 'modern_commercial' | 'neutral_bim' | 'technical_inspection';
 
 interface BuildingViewerProps {
@@ -41,6 +58,16 @@ interface BuildingViewerProps {
   initialViewerMode?: ViewerMode;
   viewerMode?: ViewerMode;
   onViewerModeChange?: (mode: ViewerMode) => void;
+  // Rainwater & Proposed Physical Interventions
+  proposedInterventions?: Intervention3DComponent[] | null;
+  onSelectInterventionComponent?: (comp: Intervention3DComponent | null) => void;
+  selectedInterventionComponentId?: string | null;
+  showProposedInterventions?: boolean;
+  onToggleProposedInterventions?: (show: boolean) => void;
+  // Camera Synchronization & Overlay Mode
+  onCameraChange?: (cam: { position: [number, number, number]; target: [number, number, number] }) => void;
+  externalCamera?: { position: [number, number, number]; target: [number, number, number] } | null;
+  isOverlayMode?: boolean;
 }
 
 const ELEMENT_COLOR_MAP: Record<string, { color: number; transparent?: boolean; opacity?: number; roughness?: number; metalness?: number }> = {
@@ -149,6 +176,14 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
   initialViewerMode = 'exterior',
   viewerMode: propViewerMode,
   onViewerModeChange,
+  proposedInterventions,
+  onSelectInterventionComponent,
+  selectedInterventionComponentId,
+  showProposedInterventions: propShowProposedInterventions = true,
+  onToggleProposedInterventions,
+  onCameraChange,
+  externalCamera,
+  isOverlayMode = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -156,9 +191,28 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const buildingGroupRef = useRef<THREE.Group | null>(null);
+  const furnitureGroupRef = useRef<THREE.Group | null>(null);
+  const proposedInterventionsGroupRef = useRef<THREE.Group | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
+
+  // Camera synchronization refs
+  const isSyncingFromExternalRef = useRef<boolean>(false);
+  const onCameraChangeRef = useRef(onCameraChange);
+  onCameraChangeRef.current = onCameraChange;
+
+  useEffect(() => {
+    if (!externalCamera || !cameraRef.current || !controlsRef.current) return;
+    isSyncingFromExternalRef.current = true;
+    cameraRef.current.position.set(externalCamera.position[0], externalCamera.position[1], externalCamera.position[2]);
+    controlsRef.current.target.set(externalCamera.target[0], externalCamera.target[1], externalCamera.target[2]);
+    controlsRef.current.update();
+    const t = setTimeout(() => {
+      isSyncingFromExternalRef.current = false;
+    }, 20);
+    return () => clearTimeout(t);
+  }, [externalCamera]);
 
   // References for environment scaling and camera auto-framing
   const gridHelperRef = useRef<THREE.GridHelper | null>(null);
@@ -171,6 +225,21 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
   const [wireframeMode, setWireframeMode] = useState(initialViewerMode === 'skeleton');
   const [viewerMode, setViewerMode] = useState<ViewerMode>(initialViewerMode);
 
+  // 3D Furniture & Exploded Stack States
+  const [furnishingPlan, setFurnishingPlan] = useState<BuildingFurnishingPlan | null>(null);
+  const [selectedFurniture, setSelectedFurniture] = useState<FurnitureItem | null>(null);
+  const [isLoadingFurniture, setIsLoadingFurniture] = useState<boolean>(false);
+  const [showFurniture, setShowFurniture] = useState<boolean>(true);
+  const [explodedOffset, setExplodedOffset] = useState<number>(0.0);
+
+  // Proposed Interventions & RWH State
+  const [showProposedRwh, setShowProposedRwh] = useState<boolean>(propShowProposedInterventions);
+  const [selectedInterventionComp, setSelectedInterventionComp] = useState<Intervention3DComponent | null>(null);
+
+  useEffect(() => {
+    setShowProposedRwh(propShowProposedInterventions);
+  }, [propShowProposedInterventions]);
+
   // Sync external viewerMode prop when provided
   useEffect(() => {
     if (propViewerMode && propViewerMode !== viewerMode) {
@@ -181,12 +250,21 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
   // Interior View Mode States
   const [interiorStoreyId, setInteriorStoreyId] = useState<string | null>(null);
   const [showCeiling, setShowCeiling] = useState<boolean>(false); // default: cutaway ceiling
-  const [wallTransparency, setWallTransparency] = useState<'translucent' | 'cutaway' | 'solid' | 'hidden'>('translucent');
+  const [wallTransparency, setWallTransparency] = useState<'translucent' | 'cutaway' | 'solid' | 'hidden'>('solid');
   const [hiddenCategories, setHiddenCategories] = useState<string[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<BuildingElement | null>(null);
   const [isWalkthrough, setIsWalkthrough] = useState<boolean>(false);
-  const [customRoomNote, setCustomRoomNote] = useState<string>('');
-  const [savedNotes, setSavedNotes] = useState<Record<string, string>>({});
+  const [dismissedNoRoomsNotice, setDismissedNoRoomsNotice] = useState<boolean>(false);
+
+  // Live state refs to prevent stale closures in event listeners and camera transitions
+  const viewerModeRef = useRef<ViewerMode>(viewerMode);
+  viewerModeRef.current = viewerMode;
+  const isWalkthroughRef = useRef<boolean>(isWalkthrough);
+  isWalkthroughRef.current = isWalkthrough;
+  const selectedRoomRef = useRef<BuildingElement | null>(selectedRoom);
+  selectedRoomRef.current = selectedRoom;
+  const interiorStoreyIdRef = useRef<string | null>(interiorStoreyId);
+  interiorStoreyIdRef.current = interiorStoreyId;
 
   // Visual Presets & Settings (Phase 3)
   const [visualPreset, setVisualPreset] = useState<VisualPreset>('arch_white');
@@ -270,6 +348,17 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.maxPolarAngle = Math.PI / 2 + 0.02; // Allow viewing slightly from below floor
+    controls.addEventListener('change', () => {
+      if (isSyncingFromExternalRef.current) return;
+      if (onCameraChangeRef.current && cameraRef.current && controlsRef.current) {
+        const cam = cameraRef.current;
+        const tgt = controlsRef.current.target;
+        onCameraChangeRef.current({
+          position: [cam.position.x, cam.position.y, cam.position.z],
+          target: [tgt.x, tgt.y, tgt.z],
+        });
+      }
+    });
     controlsRef.current = controls;
 
     // 5. Lighting
@@ -311,11 +400,16 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     scene.add(grid);
     gridHelperRef.current = grid;
 
-    // 7. Building Group Container
+    // 7. Building & Furniture Group Containers
     const buildingGroup = new THREE.Group();
     buildingGroup.name = 'buildingGroup';
     scene.add(buildingGroup);
     buildingGroupRef.current = buildingGroup;
+
+    const furnitureGroup = new THREE.Group();
+    furnitureGroup.name = 'furnitureGroup';
+    scene.add(furnitureGroup);
+    furnitureGroupRef.current = furnitureGroup;
 
     // 8. Animation Loop
     const animate = () => {
@@ -350,7 +444,17 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     resizeObserver.observe(container);
 
     // 10. Pointer click listener for Raycasting element and borehole selection
+    let mouseDownPos = { x: 0, y: 0 };
+    const handleMouseDown = (e: MouseEvent) => {
+      mouseDownPos = { x: e.clientX, y: e.clientY };
+    };
+
     const handleCanvasClick = (event: MouseEvent) => {
+      // If user was dragging mouse to orbit/rotate camera, ignore click to prevent accidental selections
+      const dx = event.clientX - mouseDownPos.x;
+      const dy = event.clientY - mouseDownPos.y;
+      if (Math.hypot(dx, dy) > 5) return;
+
       if (!cameraRef.current) return;
       const rect = renderer.domElement.getBoundingClientRect();
       mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -359,13 +463,26 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
       raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
       const allObjects: THREE.Object3D[] = [];
       if (buildingGroupRef.current) allObjects.push(...buildingGroupRef.current.children);
+      if (furnitureGroupRef.current) allObjects.push(...furnitureGroupRef.current.children);
       if (subsurfaceGroupRef.current) allObjects.push(...subsurfaceGroupRef.current.children);
+      if (proposedInterventionsGroupRef.current) allObjects.push(...proposedInterventionsGroupRef.current.children);
 
       const intersects = raycasterRef.current.intersectObjects(allObjects, true);
 
       if (intersects.length > 0) {
         let hitObj: THREE.Object3D | null = intersects[0].object;
         while (hitObj) {
+          if (hitObj.userData && hitObj.userData.isFurniture && hitObj.userData.furnitureItem) {
+            const fItem = hitObj.userData.furnitureItem as FurnitureItem;
+            setSelectedFurniture(fItem);
+            return;
+          }
+          if (hitObj.userData && hitObj.userData.isIntervention && hitObj.userData.intervention) {
+            const comp = hitObj.userData.intervention as Intervention3DComponent;
+            setSelectedInterventionComp(comp);
+            onSelectInterventionComponent?.(comp);
+            return;
+          }
           if (hitObj.userData && hitObj.userData.isBorehole && hitObj.userData.borehole) {
             setSelectedBorehole(hitObj.userData.borehole);
             return;
@@ -382,14 +499,27 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
         }
       }
       onSelectElement?.(null);
+      setSelectedRoom(null);
+      setSelectedFurniture(null);
       setSelectedBorehole(null);
+      setSelectedInterventionComp(null);
+      onSelectInterventionComponent?.(null);
     };
 
     const domElement = renderer.domElement;
+    domElement.addEventListener('mousedown', handleMouseDown);
     domElement.addEventListener('click', handleCanvasClick);
 
     // Cleanup WebGL resources on unmount
     return () => {
+      if (document.pointerLockElement) {
+        try {
+          document.exitPointerLock();
+        } catch {
+          // ignore
+        }
+      }
+      domElement.removeEventListener('mousedown', handleMouseDown);
       domElement.removeEventListener('click', handleCanvasClick);
       resizeObserver.disconnect();
       if (animFrameIdRef.current) {
@@ -418,232 +548,6 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
       controlsRef.current.autoRotate = isRotating;
     }
   }, [isRotating]);
-
-  // Handle Viewer Mode Switch
-  const handleSetViewerMode = (mode: ViewerMode) => {
-    setViewerMode(mode);
-    onViewerModeChange?.(mode);
-
-    if (mode === 'skeleton') {
-      setWireframeMode(true);
-      setIsWalkthrough(false);
-    } else if (mode === 'exterior') {
-      setWireframeMode(false);
-      setIsWalkthrough(false);
-      fitCameraToModel(isDigitalTwinMode, true);
-    } else if (mode === 'interior') {
-      setWireframeMode(false);
-      // Auto-frame interior dollhouse perspective
-      transitionToInteriorView();
-    }
-  };
-
-  // Camera transition to interior dollhouse cutaway
-  const transitionToInteriorView = (storeyId?: string | null) => {
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls || !importedModel?.bounding_box) return;
-
-    const b = importedModel.bounding_box;
-    const modelWidth = Math.max(1, b.width);
-    const modelDepth = Math.max(1, b.height);
-    const modelHeight = Math.max(1, b.depth);
-
-    let targetY = modelHeight * 0.35;
-    if (storeyId) {
-      const st = importedModel.storeys.find((s) => s.storey_id === storeyId);
-      if (st && st.elevation_m != null) {
-        targetY = Math.max(0, st.elevation_m - (b.min_z || 0) + 1.2);
-      }
-    }
-
-    const dist = Math.max(modelWidth, modelDepth) * 1.15;
-    controls.target.set(0, targetY, 0);
-    // Position camera at a 55-degree high three-quarter angle for cutaway perspective
-    camera.position.set(dist * 0.7, targetY + dist * 0.85, dist * 0.75);
-    camera.updateProjectionMatrix();
-    controls.update();
-  };
-
-  // Focus camera directly onto a specific room
-  const focusOnRoom = (room: BuildingElement) => {
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls || !importedModel?.bounding_box) return;
-
-    const b = importedModel.bounding_box;
-    const rb = room.bounding_box || {
-      center_x: b.center_x,
-      center_y: b.center_y,
-      center_z: b.min_z + 1.5,
-      width: 6,
-      height: 6,
-      depth: 3,
-    };
-
-    const roomWorldX = rb.center_x - b.center_x;
-    const roomWorldY = Math.max(0.5, rb.center_z - b.min_z);
-    const roomWorldZ = -(rb.center_y - b.center_y);
-
-    controls.target.set(roomWorldX, roomWorldY, roomWorldZ);
-    const roomSpan = Math.max(rb.width, rb.height, rb.depth, 4);
-    camera.position.set(
-      roomWorldX + roomSpan * 0.8,
-      roomWorldY + roomSpan * 0.9,
-      roomWorldZ + roomSpan * 0.8
-    );
-    camera.updateProjectionMatrix();
-    controls.update();
-  };
-
-  // Enter First-Person Walkthrough mode
-  const enterRoomWalkthrough = (room?: BuildingElement | null) => {
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls || !importedModel?.bounding_box) return;
-
-    const b = importedModel.bounding_box;
-    const targetRoom = room || selectedRoom || availableRooms[0];
-
-    let targetX = 0;
-    let floorY = 0;
-    let targetZ = 0;
-
-    if (targetRoom && targetRoom.bounding_box) {
-      const rb = targetRoom.bounding_box;
-      targetX = rb.center_x - b.center_x;
-      floorY = Math.max(0, (rb.min_z || 0) - b.min_z);
-      targetZ = -(rb.center_y - b.center_y);
-    } else if (interiorStoreyId) {
-      const storey = importedModel.storeys.find((s) => s.storey_id === interiorStoreyId);
-      floorY = Math.max(0, (storey?.elevation_m || 0) - (b.min_z || 0));
-    }
-
-    const eyeLevelY = floorY + 1.65; // Human eye level (1.65m)
-    camera.position.set(targetX, eyeLevelY, targetZ);
-    controls.target.set(targetX + 1.0, eyeLevelY, targetZ);
-    controls.minDistance = 0.05;
-    controls.maxDistance = 50;
-    controls.update();
-
-    setIsWalkthrough(true);
-  };
-
-  // Safely and completely exit First-Person Walkthrough mode
-  const exitWalkthrough = () => {
-    // 1. Release pointer lock if active in document
-    if (document.pointerLockElement) {
-      document.exitPointerLock();
-    }
-
-    // 2. Clear walkthrough mode state
-    setIsWalkthrough(false);
-
-    // 3. Restore OrbitControls settings and distances
-    const controls = controlsRef.current;
-    const camera = cameraRef.current;
-    if (controls && camera) {
-      controls.enabled = true;
-      controls.enableRotate = true;
-      controls.enableZoom = true;
-      controls.enablePan = true;
-
-      const isTwin = Boolean(importedModel && importedModel.elements && importedModel.elements.length > 0);
-      fitCameraToModel(isTwin, true);
-      controls.update();
-    }
-  };
-
-  // Walk step execution for keyboard and on-screen D-pad
-  const walkStep = (direction: 'forward' | 'backward' | 'left' | 'right', distance = 0.6) => {
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls) return;
-
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward);
-    forward.y = 0; // lock strictly to horizontal plane
-    forward.normalize();
-
-    // Standard Three.js horizontal strafe vectors (Right = forward x UP, Left = UP x forward)
-    // For forward = (fx, 0, fz), Left = (fz, 0, -fx), Right = (-fz, 0, fx)
-    const left = new THREE.Vector3(forward.z, 0, -forward.x);
-    const right = new THREE.Vector3(-forward.z, 0, forward.x);
-
-    const prevY = camera.position.y;
-    const targetPrevY = controls.target.y;
-
-    if (direction === 'forward') {
-      camera.position.addScaledVector(forward, distance);
-      controls.target.addScaledVector(forward, distance);
-    } else if (direction === 'backward') {
-      camera.position.addScaledVector(forward, -distance);
-      controls.target.addScaledVector(forward, -distance);
-    } else if (direction === 'left') {
-      camera.position.addScaledVector(left, distance);
-      controls.target.addScaledVector(left, distance);
-    } else if (direction === 'right') {
-      camera.position.addScaledVector(right, distance);
-      controls.target.addScaledVector(right, distance);
-    }
-
-    // Lock vertical height strictly to prevent accidental floor or ceiling drift
-    camera.position.y = prevY;
-    controls.target.y = targetPrevY;
-    controls.update();
-  };
-
-  // Keyboard controls listener during First-Person Walkthrough
-  useEffect(() => {
-    if (!isWalkthrough) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. ESCAPE key MUST reliably exit walkthrough mode
-      if (e.key === 'Escape' || e.code === 'Escape') {
-        e.preventDefault();
-        exitWalkthrough();
-        return;
-      }
-
-      // Ignore if user is typing in an input, textarea, select, or editable element
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement ||
-        (e.target as HTMLElement)?.isContentEditable
-      ) {
-        return;
-      }
-
-      if (e.code === 'KeyW' || e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
-        e.preventDefault();
-        walkStep('forward');
-      } else if (e.code === 'KeyS' || e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
-        e.preventDefault();
-        walkStep('backward');
-      } else if (e.code === 'KeyA' || e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
-        e.preventDefault();
-        walkStep('left');
-      } else if (e.code === 'KeyD' || e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
-        e.preventDefault();
-        walkStep('right');
-      }
-    };
-
-    const handlePointerLockChange = () => {
-      if (!document.pointerLockElement && isWalkthrough) {
-        exitWalkthrough();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('pointerlockchange', handlePointerLockChange);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('pointerlockchange', handlePointerLockChange);
-    };
-  }, [isWalkthrough]);
 
   // Fit camera with proper perspective framing
   const fitCameraToModel = (isTwin: boolean, force = false) => {
@@ -720,6 +624,257 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     lastModeRef.current = 'parametric';
     lastFittedModelIdRef.current = null;
   };
+
+  // Camera transition to interior dollhouse cutaway
+  const transitionToInteriorView = (storeyId?: string | null) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls || !importedModel?.bounding_box) return;
+
+    const b = importedModel.bounding_box;
+    const modelWidth = Math.max(1, b.width);
+    const modelDepth = Math.max(1, b.height);
+
+    let targetY = 1.4; // Centered at eye level on ground floor slab
+    if (storeyId) {
+      const st = importedModel.storeys.find((s) => s.storey_id === storeyId);
+      if (st && st.elevation_m != null) {
+        targetY = Math.max(0, st.elevation_m - (b.min_z || 0) + 1.2);
+      }
+    }
+
+    const dist = Math.max(modelWidth, modelDepth) * 1.25;
+    controls.target.set(0, targetY, 0);
+    // Position camera at a balanced 45-degree isometric 3/4 cutaway view looking into the floor
+    camera.position.set(dist * 0.75, targetY + dist * 0.75, dist * 0.8);
+    camera.updateProjectionMatrix();
+    controls.update();
+  };
+
+  // Focus camera directly onto a specific room
+  const focusOnRoom = (room: BuildingElement) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls || !importedModel?.bounding_box) return;
+
+    const b = importedModel.bounding_box;
+    const rb = room.bounding_box || {
+      center_x: b.center_x,
+      center_y: b.center_y,
+      center_z: b.min_z + 1.5,
+      width: 6,
+      height: 6,
+      depth: 3,
+    };
+
+    const roomWorldX = rb.center_x - b.center_x;
+    const roomWorldY = Math.max(0.5, rb.center_z - b.min_z);
+    const roomWorldZ = -(rb.center_y - b.center_y);
+
+    controls.target.set(roomWorldX, roomWorldY, roomWorldZ);
+    const roomSpan = Math.max(rb.width, rb.height, rb.depth, 4);
+    camera.position.set(
+      roomWorldX + roomSpan * 0.8,
+      roomWorldY + roomSpan * 0.9,
+      roomWorldZ + roomSpan * 0.8
+    );
+    camera.updateProjectionMatrix();
+    controls.update();
+  };
+
+  // Enter First-Person Walkthrough mode
+  const enterRoomWalkthrough = (room?: BuildingElement | null) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls || !importedModel?.bounding_box) return;
+
+    // Pause auto-rotation when entering first-person mode
+    setIsRotating(false);
+
+    const b = importedModel.bounding_box;
+    const targetRoom = room || selectedRoomRef.current || (availableRooms.length > 0 ? availableRooms[0] : null);
+
+    let targetX = 0;
+    let floorY = 0;
+    let targetZ = 0;
+
+    if (targetRoom && targetRoom.bounding_box) {
+      const rb = targetRoom.bounding_box;
+      targetX = rb.center_x - b.center_x;
+      floorY = Math.max(0, (rb.min_z || 0) - b.min_z);
+      targetZ = -(rb.center_y - b.center_y);
+    } else if (interiorStoreyIdRef.current) {
+      const storey = importedModel.storeys.find((s) => s.storey_id === interiorStoreyIdRef.current);
+      floorY = Math.max(0, (storey?.elevation_m || 0) - (b.min_z || 0));
+    }
+
+    const eyeLevelY = floorY + 1.65; // Human eye level (1.65m)
+    camera.position.set(targetX, eyeLevelY, targetZ);
+    controls.target.set(targetX + 1.0, eyeLevelY, targetZ);
+    controls.minDistance = 0.05;
+    controls.maxDistance = 50;
+    controls.update();
+
+    setIsWalkthrough(true);
+  };
+
+  // Centralized, safe and complete exit for First-Person Walkthrough mode
+  const exitWalkthrough = () => {
+    // 1. Release pointer lock safely if active in document
+    if (document.pointerLockElement) {
+      try {
+        document.exitPointerLock();
+      } catch {
+        // ignore
+      }
+    }
+
+    // 2. Clear walkthrough mode state
+    setIsWalkthrough(false);
+
+    // 3. Restore OrbitControls settings and camera
+    const controls = controlsRef.current;
+    const camera = cameraRef.current;
+    if (controls && camera) {
+      controls.enabled = true;
+      controls.enableRotate = true;
+      controls.enableZoom = true;
+      controls.enablePan = true;
+      controls.minDistance = 0.5;
+      controls.maxDistance = 350;
+
+      const currentMode = viewerModeRef.current;
+      const currentSelRoom = selectedRoomRef.current;
+      const currentStorey = interiorStoreyIdRef.current;
+
+      if (currentMode === 'interior') {
+        if (currentSelRoom) {
+          focusOnRoom(currentSelRoom);
+        } else {
+          transitionToInteriorView(currentStorey);
+        }
+      } else {
+        const isTwin = Boolean(importedModel && importedModel.elements && importedModel.elements.length > 0);
+        fitCameraToModel(isTwin, true);
+      }
+      controls.update();
+    }
+  };
+
+  // Handle Viewer Mode Switch
+  const handleSetViewerMode = (mode: ViewerMode) => {
+    if (isWalkthroughRef.current) {
+      exitWalkthrough();
+    }
+    setViewerMode(mode);
+    onViewerModeChange?.(mode);
+
+    if (mode === 'skeleton') {
+      setWireframeMode(true);
+    } else if (mode === 'exterior') {
+      setWireframeMode(false);
+      fitCameraToModel(isDigitalTwinMode, true);
+    } else if (mode === 'interior') {
+      setWireframeMode(false);
+      setShowCeiling(false);
+      // Auto-frame isometric dollhouse perspective
+      transitionToInteriorView(interiorStoreyId);
+    } else if (mode === 'floor_by_floor') {
+      setWireframeMode(false);
+      transitionToInteriorView(interiorStoreyId);
+    }
+  };
+
+  // Walk step execution for keyboard and navigation
+  const walkStep = (direction: 'forward' | 'backward' | 'left' | 'right', distance = 0.6) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0; // lock strictly to horizontal plane
+    forward.normalize();
+
+    // Horizontal strafe vectors
+    const left = new THREE.Vector3(forward.z, 0, -forward.x);
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+
+    const prevY = camera.position.y;
+    const targetPrevY = controls.target.y;
+
+    if (direction === 'forward') {
+      camera.position.addScaledVector(forward, distance);
+      controls.target.addScaledVector(forward, distance);
+    } else if (direction === 'backward') {
+      camera.position.addScaledVector(forward, -distance);
+      controls.target.addScaledVector(forward, -distance);
+    } else if (direction === 'left') {
+      camera.position.addScaledVector(left, distance);
+      controls.target.addScaledVector(left, distance);
+    } else if (direction === 'right') {
+      camera.position.addScaledVector(right, distance);
+      controls.target.addScaledVector(right, distance);
+    }
+
+    // Lock vertical height strictly to prevent accidental floor or ceiling drift
+    camera.position.y = prevY;
+    controls.target.y = targetPrevY;
+    controls.update();
+  };
+
+  // Keyboard controls listener during First-Person Walkthrough
+  useEffect(() => {
+    if (!isWalkthrough) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 1. ESCAPE key MUST reliably exit walkthrough mode
+      if (e.key === 'Escape' || e.code === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        exitWalkthrough();
+        return;
+      }
+
+      // Ignore if user is typing in an input, textarea, select, or editable element
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement ||
+        (e.target as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      if (e.code === 'KeyW' || e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
+        walkStep('forward');
+      } else if (e.code === 'KeyS' || e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        walkStep('backward');
+      } else if (e.code === 'KeyA' || e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        walkStep('left');
+      } else if (e.code === 'KeyD' || e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+        e.preventDefault();
+        walkStep('right');
+      }
+    };
+
+    const handlePointerLockChange = () => {
+      if (!document.pointerLockElement && isWalkthroughRef.current) {
+        exitWalkthrough();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('pointerlockchange', handlePointerLockChange);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('pointerlockchange', handlePointerLockChange);
+    };
+  }, [isWalkthrough]);
 
   // Rebuild building geometry whenever importedModel, parameters, filters, viewerMode, or interior settings change
   useEffect(() => {
@@ -803,18 +958,20 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
 
         // 3. Ceiling Cutaway Mode (Interior View)
         if (viewerMode === 'interior' && !showCeiling) {
-          if (elem.element_type === 'IfcRoof') {
-            return; // Hide roof structure in cutaway mode
+          const eName = (elem.name || '').toLowerCase();
+          if (elem.element_type === 'IfcRoof' || eName.includes('roof') || eName.includes('terrace') || eName.includes('parapet')) {
+            return; // Hide roof structure, terrace slabs, and parapets in cutaway dollhouse view
           }
           if (elem.element_type === 'IfcSlab') {
-            // If viewing a specific floor, hide slab above it
+            // Hide slabs above ground ceiling level in cutaway mode
+            if (elem.bounding_box && elem.bounding_box.min_z > 2.0) {
+              return;
+            }
             if (interiorStoreyId) {
               const currentSt = importedModel.storeys.find((s) => s.storey_id === interiorStoreyId);
-              if (currentSt && currentSt.elevation_m != null && elem.bounding_box) {
-                // Slab positioned at or above current ceiling
-                if (elem.bounding_box.min_z >= currentSt.elevation_m + 2.4) {
-                  return;
-                }
+              const stElev = (currentSt && currentSt.elevation_m != null) ? currentSt.elevation_m : 0;
+              if (elem.bounding_box && elem.bounding_box.min_z >= stElev + 2.4) {
+                return;
               }
             }
           }
@@ -861,30 +1018,49 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
           let elemOpacity = style.opacity !== undefined ? style.opacity : 1.0;
           let elemTransparent = style.transparent || false;
 
-          // Interior View Custom Wall Transparency
+          // Interior View Custom Wall Transparency & Architectural Finishes
           if (viewerMode === 'interior') {
-            if ((elem.element_type === 'IfcWall' || elem.element_type === 'IfcWallStandardCase') && isExteriorWall) {
-              if (wallTransparency === 'translucent') {
-                elemTransparent = true;
-                elemOpacity = 0.22;
-              } else if (wallTransparency === 'solid') {
+            if (elem.element_type === 'IfcWall' || elem.element_type === 'IfcWallStandardCase') {
+              if (isExteriorWall) {
+                if (wallTransparency === 'translucent') {
+                  elemTransparent = true;
+                  elemOpacity = 0.28;
+                } else if (wallTransparency === 'cutaway') {
+                  return;
+                } else {
+                  elemTransparent = false;
+                  elemOpacity = 1.0;
+                  elemColor = 0xf1f5f9; // Clean crisp architectural wall
+                }
+              } else {
+                // Interior partitions: solid opaque light finish
                 elemTransparent = false;
                 elemOpacity = 1.0;
+                elemColor = 0xf8fafc;
               }
-            }
-
-            // Room (IfcSpace) Highlighting in Interior View
-            if (elem.element_type === 'IfcSpace') {
+            } else if (elem.element_type === 'IfcSlab') {
+              // Visible solid architectural floor surface
+              elemTransparent = false;
+              elemOpacity = 1.0;
+              elemColor = 0xdcd6cd; // Warm stone/parquet architectural tone
+            } else if (elem.element_type === 'IfcDoor') {
+              elemTransparent = false;
+              elemOpacity = 1.0;
+              elemColor = 0x92400e; // Solid warm wood
+            } else if (elem.element_type === 'IfcWindow') {
+              elemTransparent = true;
+              elemOpacity = 0.45;
+              elemColor = 0x38bdf8; // Architectural glass
+            } else if (elem.element_type === 'IfcSpace') {
               if (isSelected) {
-                elemColor = 0x10b981; // Vibrant emerald
+                elemColor = 0x10b981; // Subtle emerald floor footprint
                 elemEmissive = 0x059669;
-                elemEmissiveIntensity = 0.65;
-                elemOpacity = 0.45;
+                elemEmissiveIntensity = 0.35;
+                elemOpacity = 0.12;
                 elemTransparent = true;
               } else {
-                elemColor = 0x6ee7b7; // Mint green translucent
-                elemOpacity = 0.18;
-                elemTransparent = true;
+                // In dollhouse interior view, do not draw opaque/translucent volume that hides furniture
+                return;
               }
             }
           }
@@ -913,12 +1089,21 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
             elemOpacity = 1.0;
           }
 
+          let finalColor = elemColor;
+          let finalTransparent = elemTransparent;
+          let finalOpacity = elemOpacity;
+          if (isOverlayMode && isBaseline) {
+            finalColor = 0x94a3b8;
+            finalTransparent = true;
+            finalOpacity = 0.35;
+          }
+
           const material = new THREE.MeshStandardMaterial({
-            color: elemColor,
+            color: finalColor,
             roughness: style.roughness !== undefined ? style.roughness : 0.6,
             metalness: style.metalness !== undefined ? style.metalness : 0.1,
-            transparent: elemTransparent,
-            opacity: elemOpacity,
+            transparent: finalTransparent,
+            opacity: finalOpacity,
             wireframe: visualPreset === 'technical_inspection' ? true : wireframeMode,
             emissive: elemEmissive,
             emissiveIntensity: elemEmissiveIntensity,
@@ -929,6 +1114,15 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           mesh.userData = { element: elem, elementId: elem.element_id };
+
+          // Apply vertical exploded stack offset in floor_by_floor view (local Z is world Y in ifcGroup)
+          if (viewerMode === 'floor_by_floor' && explodedOffset > 0 && importedModel?.storeys && elem.storey_id) {
+            const stIndex = importedModel.storeys.findIndex((s) => s.storey_id === elem.storey_id);
+            if (stIndex > 0) {
+              mesh.position.z += stIndex * explodedOffset;
+            }
+          }
+
           ifcGroup.add(mesh);
         } else if (elem.bounding_box) {
           // Fallback box for entities without tessellated mesh
@@ -944,10 +1138,13 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
           let boxTransparent = false;
 
           if (viewerMode === 'interior' && elem.element_type === 'IfcSpace') {
-            boxColor = isSelected ? 0x10b981 : 0x6ee7b7;
-            boxEmissive = isSelected ? 0x059669 : 0x000000;
-            boxEmissiveIntensity = isSelected ? 0.6 : 0.0;
-            boxOpacity = isSelected ? 0.45 : 0.18;
+            if (!isSelected) {
+              return;
+            }
+            boxColor = 0x10b981;
+            boxEmissive = 0x059669;
+            boxEmissiveIntensity = 0.35;
+            boxOpacity = 0.12;
             boxTransparent = true;
           } else if (isHighlighted) {
             boxColor = 0xf43f5e;
@@ -970,6 +1167,12 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
           });
           const boxMesh = new THREE.Mesh(boxGeo, material);
           boxMesh.position.set(b.center_x, b.center_y, b.center_z);
+          if (viewerMode === 'floor_by_floor' && explodedOffset > 0 && importedModel?.storeys && elem.storey_id) {
+            const stIndex = importedModel.storeys.findIndex((s) => s.storey_id === elem.storey_id);
+            if (stIndex > 0) {
+              boxMesh.position.z += stIndex * explodedOffset;
+            }
+          }
           boxMesh.castShadow = true;
           boxMesh.receiveShadow = true;
           boxMesh.userData = { element: elem, elementId: elem.element_id };
@@ -1076,6 +1279,79 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     selectedElementId,
     highlightedElementIds,
     highlightSeverity,
+    explodedOffset,
+    isOverlayMode,
+    isBaseline,
+  ]);
+
+  // Load or auto-generate 3D interior furnishing plan
+  useEffect(() => {
+    const modelId = importedModel?.model_id || 'sample-office-twin';
+    if (viewerMode === 'interior' || viewerMode === 'floor_by_floor') {
+      setIsLoadingFurniture(true);
+      fetchBuildingFurnishingPlanApi(modelId, true)
+        .then((plan) => {
+          setFurnishingPlan(plan);
+        })
+        .catch((err) => {
+          console.warn('Could not load furnishing plan:', err);
+        })
+        .finally(() => {
+          setIsLoadingFurniture(false);
+        });
+    }
+  }, [importedModel?.model_id, viewerMode]);
+
+  // Rebuild 3D Furniture objects
+  useEffect(() => {
+    const furnitureGroup = furnitureGroupRef.current;
+    if (!furnitureGroup) return;
+    furnitureGroup.clear();
+
+    if (!showFurniture || (viewerMode !== 'interior' && viewerMode !== 'floor_by_floor')) {
+      return;
+    }
+
+    if (!furnishingPlan || !furnishingPlan.all_items) return;
+
+    const activeStorey = (viewerMode === 'interior' || viewerMode === 'floor_by_floor') ? interiorStoreyId : selectedStoreyId;
+
+    furnishingPlan.all_items.forEach((item) => {
+      if (!item.is_visible) return;
+      if (activeStorey && item.storey_id && item.storey_id !== activeStorey) {
+        return;
+      }
+
+      const fGroup = Furniture3DBuilder.buildFurnitureObject(item);
+
+      // Coordinate transformation: Transform from IFC coordinate space to Three.js centered world space
+      if (importedModel && importedModel.bounding_box) {
+        const bbox = importedModel.bounding_box;
+        const wx = item.position_m.x - bbox.center_x;
+        const wy = item.position_m.y - bbox.min_z;
+        const wz = bbox.center_y - item.position_m.z;
+        fGroup.position.set(wx, wy, wz);
+        fGroup.rotation.y = (-item.rotation_deg * Math.PI) / 180;
+      }
+
+      // Handle vertical exploded offset in floor_by_floor mode
+      if (viewerMode === 'floor_by_floor' && explodedOffset > 0 && importedModel?.storeys) {
+        const stIndex = importedModel.storeys.findIndex((s) => s.storey_id === item.storey_id);
+        if (stIndex > 0) {
+          fGroup.position.y += stIndex * explodedOffset;
+        }
+      }
+
+      furnitureGroup.add(fGroup);
+    });
+  }, [
+    furnishingPlan,
+    showFurniture,
+    viewerMode,
+    interiorStoreyId,
+    selectedStoreyId,
+    explodedOffset,
+    importedModel?.storeys,
   ]);
 
   // Subsurface Geotechnical 3D Visualization (Phase 4)
@@ -1204,6 +1480,213 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     }
   }, [showSubsurface, showBoreholes, showGroundwater, showFloodOverlay, geotechnicalProfile, selectedBorehole]);
 
+  // 3D Proposed Rainwater Interventions Visualization
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    if (!proposedInterventionsGroupRef.current) {
+      const group = new THREE.Group();
+      group.name = 'proposedInterventionsGroup';
+      scene.add(group);
+      proposedInterventionsGroupRef.current = group;
+    }
+
+    const group = proposedInterventionsGroupRef.current;
+    while (group.children.length > 0) {
+      const child = group.children[0] as THREE.Mesh;
+      group.remove(child);
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+        else child.material.dispose();
+      }
+    }
+
+    let activeComponents: Intervention3DComponent[] = proposedInterventions || [];
+    if (
+      activeComponents.length === 0 &&
+      showInterventions &&
+      !isBaseline &&
+      params.selected_interventions &&
+      params.selected_interventions.length > 0 &&
+      importedModel?.bounding_box
+    ) {
+      const bbox = importedModel.bounding_box;
+      const rooftopZ = bbox.depth || bbox.max_z || 10.0;
+      const w = bbox.width || 14.0;
+      const l = bbox.height || 16.0;
+
+      activeComponents = [];
+      const selectedIds = params.selected_interventions as string[];
+      if (selectedIds.includes('solar_pv') || selectedIds.includes('reflective_roof')) {
+        activeComponents.push({
+          component_id: 'auto-solar-array-01',
+          component_type: 'solar_pv_array',
+          name: 'High-Efficiency Monocrystalline Rooftop PV Array',
+          material: 'Monocrystalline Silicon & Anodized Aluminum',
+          dimensions: [w * 0.7, 0.12, l * 0.6],
+          position: [0.0, 0.0, rooftopZ + 0.15],
+          color_hex: '#1e3a8a',
+          is_subsurface: false,
+          geometry_type: 'box',
+          specification: `${Math.round((w * l * 0.5) / 6.0)} kWp capacity, 21.5% cell efficiency`,
+        });
+      }
+      if (selectedIds.includes('rainwater_harvesting') || selectedIds.includes('solar_pv')) {
+        activeComponents.push({
+          component_id: 'auto-rwh-tank-01',
+          component_type: 'storage_tank',
+          name: 'Rainwater Storage Cistern (10 kL)',
+          material: 'Food-grade HDPE',
+          dimensions: [1.2, 2.2, 1.2],
+          position: [w / 2 + 1.8, -l / 4, 1.1],
+          color_hex: '#0284c7',
+          is_subsurface: false,
+          geometry_type: 'cylinder',
+          specification: '10,000 Liters storage with dual stage mechanical filtration',
+        });
+        activeComponents.push({
+          component_id: 'auto-rwh-downspout-01',
+          component_type: 'gutter_downspout',
+          name: 'First-Flush Gutter Downspout',
+          material: 'uPVC 110mm Pipe',
+          dimensions: [0.08, rooftopZ, 0.08],
+          position: [w / 2 + 0.3, -l / 4, rooftopZ / 2],
+          color_hex: '#0369a1',
+          is_subsurface: false,
+          geometry_type: 'cylinder',
+          specification: '110mm diameter with automated leaf-separator diverter',
+        });
+      }
+      if (selectedIds.includes('external_shading')) {
+        activeComponents.push({
+          component_id: 'auto-shading-louvers-01',
+          component_type: 'window_louvers',
+          name: 'Solar Shading Louver Grille',
+          material: 'Extruded Architectural Aluminum',
+          dimensions: [w * 0.8, 0.05, 0.6],
+          position: [0.0, l / 2 + 0.35, rooftopZ * 0.65],
+          color_hex: '#78716c',
+          is_subsurface: false,
+          geometry_type: 'box',
+          specification: '600mm overhang depth angled at 45 deg solar cutoff',
+        });
+      }
+    }
+
+    if (!showProposedRwh || activeComponents.length === 0) {
+      if (groundRef.current) {
+        const gMat = groundRef.current.material as THREE.MeshStandardMaterial;
+        gMat.transparent = false;
+        gMat.opacity = 1.0;
+      }
+      return;
+    }
+
+    const hasSubsurface = activeComponents.some((c) => c.is_subsurface);
+    if (groundRef.current) {
+      const gMat = groundRef.current.material as THREE.MeshStandardMaterial;
+      if (hasSubsurface) {
+        gMat.transparent = true;
+        gMat.opacity = 0.65;
+      } else {
+        gMat.transparent = false;
+        gMat.opacity = 1.0;
+      }
+    }
+
+    activeComponents.forEach((comp) => {
+      const isSelected =
+        (selectedInterventionComp && selectedInterventionComp.component_id === comp.component_id) ||
+        (selectedInterventionComponentId === comp.component_id);
+
+      const colorInt = parseInt(comp.color_hex.replace('#', '0x'), 16) || 0x0284c7;
+
+      if (comp.geometry_type === 'cylinder') {
+        const radius = Math.max(0.04, comp.dimensions[0]);
+        const height = Math.max(0.1, comp.dimensions[1]);
+        const geo = new THREE.CylinderGeometry(radius, radius, height, 24);
+        const mat = new THREE.MeshStandardMaterial({
+          color: colorInt,
+          roughness: 0.35,
+          metalness: 0.25,
+          emissive: isSelected ? 0x0284c7 : 0x000000,
+          emissiveIntensity: isSelected ? 0.65 : 0.0,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(comp.position[0], comp.position[2], comp.position[1]);
+        mesh.castShadow = !comp.is_subsurface;
+        mesh.receiveShadow = true;
+        mesh.userData = { isIntervention: true, intervention: comp, componentId: comp.component_id };
+        group.add(mesh);
+
+        // Plinth pad for above-ground storage tanks
+        if (comp.component_type === 'storage_tank' && !comp.is_subsurface) {
+          const padRadius = radius * 1.15;
+          const padHeight = 0.15;
+          const padGeo = new THREE.CylinderGeometry(padRadius, padRadius, padHeight, 24);
+          const padMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85 });
+          const padMesh = new THREE.Mesh(padGeo, padMat);
+          padMesh.position.set(comp.position[0], Math.max(0.075, comp.position[2] - height / 2.0 - padHeight / 2.0), comp.position[1]);
+          padMesh.receiveShadow = true;
+          group.add(padMesh);
+        }
+      } else {
+        // Box geometry: dimensions = [width_x, height_y, length_z]
+        const dimX = Math.max(0.05, comp.dimensions[0]);
+        const dimY = Math.max(0.05, comp.dimensions[1]);
+        const dimZ = Math.max(0.05, comp.dimensions[2]);
+        const geo = new THREE.BoxGeometry(dimX, dimY, dimZ);
+        const mat = new THREE.MeshStandardMaterial({
+          color: colorInt,
+          roughness: 0.5,
+          metalness: 0.15,
+          transparent: Boolean(comp.is_subsurface),
+          opacity: comp.is_subsurface ? 0.82 : 1.0,
+          emissive: isSelected ? 0x0284c7 : 0x000000,
+          emissiveIntensity: isSelected ? 0.65 : 0.0,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(comp.position[0], comp.position[2], comp.position[1]);
+        mesh.castShadow = !comp.is_subsurface;
+        mesh.receiveShadow = true;
+        mesh.userData = { isIntervention: true, intervention: comp, componentId: comp.component_id };
+        group.add(mesh);
+
+        // Edge wireframe for clean definition
+        const edges = new THREE.EdgesGeometry(geo);
+        const lineMat = new THREE.LineBasicMaterial({
+          color: isSelected ? 0x0284c7 : (comp.is_subsurface ? 0x0369a1 : 0x1e293b),
+          transparent: true,
+          opacity: 0.65,
+        });
+        const line = new THREE.LineSegments(edges, lineMat);
+        line.position.copy(mesh.position);
+        group.add(line);
+
+        // If subsurface underground cistern, add surface manhole hatch
+        if (comp.is_subsurface && comp.component_type === 'storage_tank') {
+          const hatchGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.08, 16);
+          const hatchMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6, metalness: 0.6 });
+          const hatchMesh = new THREE.Mesh(hatchGeo, hatchMat);
+          hatchMesh.position.set(comp.position[0], 0.04, comp.position[1]);
+          hatchMesh.userData = { isIntervention: true, intervention: comp, componentId: comp.component_id };
+          group.add(hatchMesh);
+        }
+      }
+    });
+  }, [
+    proposedInterventions,
+    showProposedRwh,
+    selectedInterventionComp,
+    selectedInterventionComponentId,
+    showInterventions,
+    isBaseline,
+    params.selected_interventions,
+    importedModel,
+  ]);
+
   // Camera Reset / Fit to Model
   const handleResetCamera = () => {
     if (viewerMode === 'interior') {
@@ -1220,18 +1703,8 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
     );
   };
 
-  // Handle saving custom room note
-  const handleSaveRoomNote = (roomId: string) => {
-    if (!customRoomNote.trim()) return;
-    setSavedNotes((prev) => ({
-      ...prev,
-      [roomId]: customRoomNote.trim(),
-    }));
-    setCustomRoomNote('');
-  };
-
-  // Extract selected room details for the inspector panel
-  const currentRoom = selectedRoom || (availableRooms.length > 0 && viewerMode === 'interior' ? availableRooms[0] : null);
+  // Extract selected room details for the inspector panel (hidden by default unless room is explicitly selected)
+  const currentRoom = selectedRoom;
   const pset = currentRoom?.source_properties?.Pset_SpaceCommon || currentRoom?.source_properties || {};
   const roomName = currentRoom?.name || pset.RoomName || currentRoom?.element_id || 'Interior Space';
   const roomFloor = currentRoom?.storey_name || (pset.FloorNumber ? `Floor ${pset.FloorNumber}` : 'Ground Floor');
@@ -1242,6 +1715,64 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
   const materialsList = currentRoom?.materials && currentRoom.materials.length > 0
     ? currentRoom.materials.join(', ')
     : 'Commercial Carpet / Tile, Acoustic Drop Ceiling, Drywall';
+
+  // Rotate selected furniture by 90 degrees
+  const handleRotateSelectedFurniture = async () => {
+    if (!selectedFurniture || !importedModel) return;
+    const modelId = importedModel.model_id;
+    const newRot = (selectedFurniture.rotation_deg + 90) % 360;
+    try {
+      const updated = await updateFurnitureItemApi(modelId, selectedFurniture.id, {
+        rotation_deg: newRot,
+      });
+      setSelectedFurniture(updated);
+      setFurnishingPlan((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          all_items: prev.all_items.map((it) => (it.id === updated.id ? updated : it)),
+        };
+      });
+    } catch (err) {
+      console.error('Failed to rotate furniture item:', err);
+    }
+  };
+
+  // Delete selected furniture
+  const handleDeleteSelectedFurniture = async () => {
+    if (!selectedFurniture || !importedModel) return;
+    const modelId = importedModel.model_id;
+    try {
+      await removeFurnitureItemApi(modelId, selectedFurniture.id);
+      const fId = selectedFurniture.id;
+      setSelectedFurniture(null);
+      setFurnishingPlan((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          total_furniture_count: Math.max(0, prev.total_furniture_count - 1),
+          all_items: prev.all_items.filter((it) => it.id !== fId),
+        };
+      });
+    } catch (err) {
+      console.error('Failed to delete furniture item:', err);
+    }
+  };
+
+  // Auto-furnish or regenerate layout
+  const handleRegenerateFurniture = async () => {
+    const modelId = importedModel?.model_id || 'sample-office-twin';
+    setIsLoadingFurniture(true);
+    try {
+      const plan = await generateBuildingFurnishingPlanApi(modelId, {}, true);
+      setFurnishingPlan(plan);
+      setSelectedFurniture(null);
+    } catch (err) {
+      console.error('Failed to regenerate furniture plan:', err);
+    } finally {
+      setIsLoadingFurniture(false);
+    }
+  };
 
   return (
     <div className={`relative flex flex-col bg-charcoal-50 rounded-xl border border-charcoal-200 overflow-hidden shadow-sm ${className}`}>
@@ -1271,7 +1802,7 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
           )}
         </div>
 
-        {/* Center: Viewer Mode Selector (Skeleton View | Exterior View | Interior View) */}
+        {/* Center: Viewer Mode Selector (Skeleton View | Exterior View | Furnished Interior | Floor-by-Floor) */}
         <div className="flex items-center bg-white/95 backdrop-blur-md p-1 rounded-xl border border-charcoal-200 shadow-md pointer-events-auto text-xs">
           <button
             onClick={() => handleSetViewerMode('skeleton')}
@@ -1301,25 +1832,60 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
 
           <button
             onClick={() => handleSetViewerMode('interior')}
-            title="Interior View: enter building, navigate storeys, and inspect rooms"
+            title="Furnished Interior View: isometric dollhouse cutaway with 3D furniture and room layouts"
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all ${
               viewerMode === 'interior'
+                ? 'bg-emerald-800 text-white shadow-2xs'
+                : 'text-charcoal-600 hover:text-charcoal-900'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Furnished Interior</span>
+          </button>
+
+          <button
+            onClick={() => handleSetViewerMode('floor_by_floor')}
+            title="Floor-by-Floor View: isolate individual storeys and exploded vertical stack"
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all ${
+              viewerMode === 'floor_by_floor'
                 ? 'bg-charcoal-900 text-white shadow-2xs'
                 : 'text-charcoal-600 hover:text-charcoal-900'
             }`}
           >
             <Home className="w-3.5 h-3.5" />
-            <span>Interior View</span>
+            <span>Floor-by-Floor</span>
           </button>
         </div>
 
         {/* Right: Camera Action Buttons */}
         <div className="flex items-center space-x-1 bg-white/90 backdrop-blur-xs p-1 rounded-lg border border-charcoal-200 shadow-xs pointer-events-auto">
-          {(selectedElementId || selectedRoom || (highlightedElementIds && highlightedElementIds.length > 0)) && (
+          {/* Rainwater Harvesting 3D Overlay Toggle */}
+          {proposedInterventions && proposedInterventions.length > 0 && (
+            <button
+              onClick={() => {
+                const nextVal = !showProposedRwh;
+                setShowProposedRwh(nextVal);
+                onToggleProposedInterventions?.(nextVal);
+              }}
+              title="Toggle Proposed 3D Rainwater Components (Gutters, Downpipes, Storage, Swale)"
+              className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center space-x-1.5 transition-all border ${
+                showProposedRwh
+                  ? 'bg-sky-600 text-white border-sky-700 shadow-2xs'
+                  : 'bg-stone-50 text-stone-500 border-stone-200 line-through'
+              }`}
+            >
+              <Droplets className="w-3.5 h-3.5" />
+              <span>3D RWH ({proposedInterventions.length})</span>
+            </button>
+          )}
+
+          {(selectedElementId || selectedRoom || selectedInterventionComp || (highlightedElementIds && highlightedElementIds.length > 0)) && (
             <button
               onClick={() => {
                 onSelectElement?.(null);
                 setSelectedRoom(null);
+                setSelectedInterventionComp(null);
+                onSelectInterventionComponent?.(null);
                 onClearHighlight?.();
               }}
               title="Clear selected element & highlights"
@@ -1361,9 +1927,9 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
       </div>
 
       {/* ===================================================================== */}
-      {/* INTERIOR VIEW SUB-TOOLBAR (ACTIVE WHEN INTERIOR VIEW IS SELECTED) */}
+      {/* INTERIOR & FLOOR-BY-FLOOR SUB-TOOLBAR (ACTIVE WHEN INTERIOR OR FLOOR_BY_FLOOR IS SELECTED & NOT IN WALKTHROUGH) */}
       {/* ===================================================================== */}
-      {viewerMode === 'interior' && (
+      {(viewerMode === 'interior' || viewerMode === 'floor_by_floor') && !isWalkthrough && (
         <div className="absolute top-16 left-3 right-3 z-10 flex flex-wrap items-center justify-between gap-2 bg-white/95 backdrop-blur-md p-2 rounded-xl border border-charcoal-200 shadow-md text-xs pointer-events-auto animate-in fade-in duration-150">
           <div className="flex flex-wrap items-center gap-2">
             {/* Storey Navigation Pills */}
@@ -1399,68 +1965,26 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
               ))}
             </div>
 
-            {/* Ceiling Cutaway Toggle */}
-            <button
-              onClick={() => setShowCeiling(!showCeiling)}
-              title={showCeiling ? 'Hide ceiling and roof for cutaway interior view' : 'Show ceiling and roof'}
-              className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center space-x-1.5 transition-colors ${
-                !showCeiling
-                  ? 'bg-amber-500/10 border-amber-400 text-amber-900 font-bold'
-                  : 'bg-stone-100 border-charcoal-200 text-charcoal-700'
-              }`}
-            >
-              <span>{showCeiling ? 'Ceiling: Visible' : 'Ceiling: Cutaway (Hidden)'}</span>
-            </button>
+            {/* In Floor-by-Floor View: Exploded Stack Slider */}
+            {viewerMode === 'floor_by_floor' && (
+              <div className="flex items-center space-x-2 bg-stone-50 border border-charcoal-200 rounded-lg px-2.5 py-1 text-[11px]">
+                <Layers className="w-3.5 h-3.5 text-charcoal-600" />
+                <span className="font-semibold text-charcoal-700">Exploded Stack:</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="4.0"
+                  step="0.5"
+                  value={explodedOffset}
+                  onChange={(e) => setExplodedOffset(parseFloat(e.target.value))}
+                  className="w-20 h-1.5 bg-stone-300 rounded-lg cursor-pointer accent-emerald-700"
+                />
+                <span className="font-mono text-emerald-800 font-bold w-9">{explodedOffset.toFixed(1)}m</span>
+              </div>
+            )}
 
-            {/* Wall Transparency Control */}
-            <div className="flex items-center space-x-1 bg-stone-100 p-0.5 rounded-lg border border-charcoal-200 text-[11px]">
-              <span className="text-[10px] text-charcoal-500 uppercase font-bold px-1.5">Walls:</span>
-              {(['translucent', 'cutaway', 'solid', 'hidden'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => setWallTransparency(mode)}
-                  className={`px-2 py-0.5 rounded capitalize font-semibold transition-all ${
-                    wallTransparency === mode
-                      ? 'bg-charcoal-900 text-white shadow-2xs'
-                      : 'text-charcoal-600 hover:text-charcoal-900'
-                  }`}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-
-            {/* Quick Category Toggles */}
-            <div className="hidden lg:flex items-center space-x-1 bg-stone-100 p-0.5 rounded-lg border border-charcoal-200 text-[10px]">
-              <span className="text-[9px] text-charcoal-500 uppercase font-bold px-1">Hide:</span>
-              {[
-                { type: 'IfcWall', label: 'Walls' },
-                { type: 'IfcSlab', label: 'Slabs' },
-                { type: 'IfcDoor', label: 'Doors' },
-                { type: 'IfcWindow', label: 'Windows' },
-                { type: 'IfcSpace', label: 'Rooms' },
-              ].map(({ type, label: catLabel }) => {
-                const isHidden = hiddenCategories.includes(type);
-                return (
-                  <button
-                    key={type}
-                    onClick={() => toggleCategory(type)}
-                    className={`px-1.5 py-0.5 rounded font-semibold transition-all ${
-                      isHidden
-                        ? 'bg-rose-100 text-rose-800 line-through'
-                        : 'text-charcoal-600 hover:text-charcoal-900'
-                    }`}
-                  >
-                    {catLabel}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-2">
             {/* Room Selector Dropdown */}
-            {availableRooms.length > 0 && (
+            {viewerMode === 'interior' && availableRooms.length > 0 && (
               <select
                 value={selectedRoom?.element_id || ''}
                 onChange={(e) => {
@@ -1471,7 +1995,7 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
                     focusOnRoom(rm);
                   }
                 }}
-                className="bg-white border border-charcoal-200 rounded-lg px-2.5 py-1 text-[11px] font-semibold text-charcoal-800"
+                className="bg-white border border-charcoal-200 rounded-lg px-2.5 py-1 text-[11px] font-semibold text-charcoal-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               >
                 <option value="">Select Room ({availableRooms.length} detected)...</option>
                 {availableRooms.map((rm) => (
@@ -1481,41 +2005,179 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
                 ))}
               </select>
             )}
+          </div>
+
+          <div className="flex items-center space-x-2">
+            {/* 3D Furniture Visibility Toggle */}
+            <button
+              onClick={() => setShowFurniture(!showFurniture)}
+              title={showFurniture ? 'Hide 3D proposed furniture' : 'Show 3D proposed furniture'}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center space-x-1.5 transition-colors border ${
+                showFurniture
+                  ? 'bg-amber-50 text-amber-900 border-amber-300 shadow-2xs'
+                  : 'bg-stone-50 text-stone-500 border-stone-200'
+              }`}
+            >
+              <Armchair className="w-3.5 h-3.5 text-amber-700" />
+              <span>{showFurniture ? 'Furniture On' : 'Furniture Off'}</span>
+            </button>
+
+            {/* Auto-Furnish Layout Action */}
+            <button
+              onClick={handleRegenerateFurniture}
+              disabled={isLoadingFurniture}
+              title="Automatically regenerate room-specific 3D furniture layout"
+              className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 text-charcoal-800 rounded-lg text-[11px] font-semibold flex items-center space-x-1.5 transition-colors border border-charcoal-200 disabled:opacity-50"
+            >
+              <Sparkles className={`w-3.5 h-3.5 text-emerald-700 ${isLoadingFurniture ? 'animate-spin' : ''}`} />
+              <span>{isLoadingFurniture ? 'Furnishing...' : `Auto-Furnish (${furnishingPlan?.total_furniture_count || 0})`}</span>
+            </button>
 
             {/* First-Person Walkthrough Button */}
             <button
-              onClick={() => {
-                if (isWalkthrough) {
-                  setIsWalkthrough(false);
-                } else {
-                  enterRoomWalkthrough(selectedRoom);
-                }
-              }}
-              className={`px-3 py-1 rounded-lg text-[11px] font-semibold flex items-center space-x-1.5 transition-colors shadow-2xs ${
-                isWalkthrough
-                  ? 'bg-rose-600 hover:bg-rose-700 text-white'
-                  : 'bg-emerald-800 hover:bg-emerald-900 text-white'
-              }`}
+              onClick={() => enterRoomWalkthrough(selectedRoom)}
+              className="px-3 py-1 bg-emerald-800 hover:bg-emerald-900 text-white rounded-lg text-[11px] font-semibold flex items-center space-x-1.5 transition-colors shadow-2xs"
             >
               <Footprints className="w-3.5 h-3.5" />
-              <span>{isWalkthrough ? 'Exit Walk' : 'Walk Inside (FPS)'}</span>
+              <span>Walk Inside (FPS)</span>
+            </button>
+
+            {/* Cutaway & Walls Settings Drawer Shortcut */}
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              title="Cutaway & Visibility Settings"
+              className="p-1 rounded-lg hover:bg-stone-100 text-charcoal-600 hover:text-charcoal-900 border border-charcoal-200 flex items-center space-x-1 text-[11px] px-2 font-medium"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>Cutaway & Walls</span>
             </button>
           </div>
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* ROOM INFORMATION INSPECTOR CARD (FLOATING IN INTERIOR VIEW) */}
+      {/* 3D FURNITURE INSPECTOR CARD (WHEN FURNITURE ITEM IS CLICKED/SELECTED) */}
       {/* ===================================================================== */}
-      {viewerMode === 'interior' && currentRoom && (
-        <div className="absolute top-32 left-3 z-20 bg-white/95 backdrop-blur-md rounded-2xl border border-charcoal-200 shadow-2xl p-4 max-w-xs w-full space-y-3 pointer-events-auto animate-in slide-in-from-left-3 duration-200">
-          <div className="flex items-center justify-between pb-2 border-b border-charcoal-100">
+      {selectedFurniture && (
+        <div className="absolute bottom-16 right-4 z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-emerald-300 shadow-2xl p-4 max-w-sm w-80 space-y-3 pointer-events-auto animate-in slide-in-from-bottom-2 duration-150">
+          <div className="flex items-start justify-between">
+            <div className="space-y-0.5">
+              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold">
+                {selectedFurniture.category.replace(/_/g, ' ')}
+              </span>
+              <h4 className="text-xs font-bold text-charcoal-900">{selectedFurniture.name}</h4>
+            </div>
+            <button
+              onClick={() => setSelectedFurniture(null)}
+              className="text-charcoal-400 hover:text-charcoal-700 p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[11px] bg-stone-50 p-2.5 rounded-xl border border-charcoal-100">
+            <div>
+              <span className="text-charcoal-500 text-[10px] block">Dimensions</span>
+              <span className="font-mono font-semibold text-charcoal-800">
+                {selectedFurniture.dimensions_m.width}m × {selectedFurniture.dimensions_m.depth}m × {selectedFurniture.dimensions_m.height}m
+              </span>
+            </div>
+            <div>
+              <span className="text-charcoal-500 text-[10px] block">Clearance</span>
+              <span className="font-mono font-semibold text-charcoal-800">
+                {selectedFurniture.clearance_m}m Corridor
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2 pt-1 border-t border-charcoal-100">
+            <button
+              onClick={handleRotateSelectedFurniture}
+              className="flex-1 flex items-center justify-center space-x-1 px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-stone-200 text-charcoal-800 text-xs font-semibold transition-colors"
+              title="Rotate furniture 90 degrees"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Rotate 90°</span>
+            </button>
+
+            <button
+              onClick={handleDeleteSelectedFurniture}
+              className="flex items-center justify-center space-x-1 px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold border border-rose-200 transition-colors"
+              title="Remove furniture item"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Remove</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* 3D PROPOSED INTERVENTION COMPONENT INSPECTOR CARD */}
+      {/* ===================================================================== */}
+      {selectedInterventionComp && (
+        <div className="absolute top-20 left-3 z-20 bg-white/95 backdrop-blur-md rounded-2xl border border-sky-300 shadow-2xl p-4 max-w-xs w-full space-y-3 pointer-events-auto animate-in slide-in-from-left-3 duration-200">
+          <div className="flex items-center justify-between pb-2 border-b border-sky-100">
             <div className="flex items-center space-x-2">
-              <div className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg border border-emerald-200">
-                <Home className="w-4 h-4" />
+              <div className="p-1.5 bg-sky-100 text-sky-800 rounded-lg border border-sky-200">
+                <Droplets className="w-4 h-4 text-sky-600" />
               </div>
               <div>
-                <h4 className="text-xs font-bold text-charcoal-900 tracking-tight">{roomName}</h4>
+                <h4 className="text-xs font-bold text-charcoal-900 tracking-tight leading-tight">{selectedInterventionComp.name}</h4>
+                <span className="text-[10px] text-sky-700 font-mono uppercase">{selectedInterventionComp.component_type.replace(/_/g, ' ')}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedInterventionComp(null);
+                onSelectInterventionComponent?.(null);
+              }}
+              className="text-charcoal-400 hover:text-charcoal-700 p-0.5 rounded"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="space-y-2 text-xs">
+            <div className="bg-stone-50 p-2.5 rounded-xl border border-charcoal-100 space-y-1">
+              <span className="text-[10px] text-charcoal-500 uppercase font-bold tracking-wider block">Material & Specification</span>
+              <div className="font-semibold text-charcoal-800">{selectedInterventionComp.material}</div>
+              <p className="text-[11px] text-charcoal-600 leading-snug">{selectedInterventionComp.specification}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-stone-50 p-2 rounded-xl border border-charcoal-100">
+                <span className="text-[10px] text-charcoal-500 uppercase font-semibold block">Geometry</span>
+                <div className="font-bold text-charcoal-800 capitalize">{selectedInterventionComp.geometry_type}</div>
+              </div>
+              <div className="bg-stone-50 p-2 rounded-xl border border-charcoal-100">
+                <span className="text-[10px] text-charcoal-500 uppercase font-semibold block">Placement</span>
+                <div className="font-bold text-charcoal-800">{selectedInterventionComp.is_subsurface ? 'Subsurface (Buried)' : 'Above Ground'}</div>
+              </div>
+            </div>
+
+            {selectedInterventionComp.volume_liters != null && selectedInterventionComp.volume_liters > 0 && (
+              <div className="bg-sky-50 p-2.5 rounded-xl border border-sky-200 flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-sky-900">Capacity / Volume</span>
+                <span className="font-bold text-sky-950 font-mono text-sm">{selectedInterventionComp.volume_liters.toLocaleString()} Liters</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* COMPACT CONTEXTUAL ROOM INFORMATION INSPECTOR CARD */}
+      {/* ===================================================================== */}
+      {viewerMode === 'interior' && !isWalkthrough && currentRoom && (
+        <div className="absolute top-28 left-3 z-20 bg-white/95 backdrop-blur-md rounded-2xl border border-charcoal-200 shadow-xl p-3.5 max-w-xs w-72 space-y-2.5 pointer-events-auto animate-in slide-in-from-left-2 duration-150">
+          <div className="flex items-center justify-between pb-2 border-b border-charcoal-100">
+            <div className="flex items-center space-x-2 min-w-0">
+              <div className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg border border-emerald-200 shrink-0">
+                <Home className="w-4 h-4" />
+              </div>
+              <div className="truncate">
+                <h4 className="text-xs font-bold text-charcoal-900 tracking-tight truncate">{roomName}</h4>
                 <span className="text-[10px] text-charcoal-500 font-mono">{roomFloor}</span>
               </div>
             </div>
@@ -1524,7 +2186,8 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
                 setSelectedRoom(null);
                 onSelectElement?.(null);
               }}
-              className="text-charcoal-400 hover:text-charcoal-700 p-0.5 rounded"
+              className="text-charcoal-400 hover:text-charcoal-700 p-1 rounded-md hover:bg-stone-100 transition-colors shrink-0"
+              title="Close room details"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1533,70 +2196,45 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
           {/* Room Area & Dimensions */}
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="bg-stone-50 p-2 rounded-xl border border-charcoal-100">
-              <span className="text-[10px] text-charcoal-500 uppercase font-semibold">Net Floor Area</span>
-              <div className="font-bold text-charcoal-900 text-sm">{roomArea} m²</div>
+              <span className="text-[10px] text-charcoal-500 uppercase font-semibold block">Net Area</span>
+              <div className="font-bold text-charcoal-900 text-xs">{roomArea} m²</div>
             </div>
             <div className="bg-stone-50 p-2 rounded-xl border border-charcoal-100">
-              <span className="text-[10px] text-charcoal-500 uppercase font-semibold">Dimensions</span>
-              <div className="font-bold text-charcoal-900 text-sm">{roomDimensions}</div>
+              <span className="text-[10px] text-charcoal-500 uppercase font-semibold block">Dimensions</span>
+              <div className="font-bold text-charcoal-900 text-xs">{roomDimensions}</div>
             </div>
           </div>
 
           {/* Connected Openings */}
-          <div className="space-y-1 text-xs">
-            <div className="flex items-center justify-between text-[11px] text-charcoal-700">
-              <span className="font-semibold">Connected Doors:</span>
+          <div className="flex items-center justify-between text-[11px] bg-stone-50 p-2 rounded-xl border border-charcoal-100 text-charcoal-700">
+            <div>
+              <span className="text-charcoal-500 mr-1">Doors:</span>
               <span className="font-mono font-bold text-amber-800">
-                {Array.isArray(connectedDoors) ? connectedDoors.length : 1} Door(s)
+                {Array.isArray(connectedDoors) ? connectedDoors.length : 1}
               </span>
             </div>
-            <div className="flex items-center justify-between text-[11px] text-charcoal-700">
-              <span className="font-semibold">Associated Windows:</span>
+            <div>
+              <span className="text-charcoal-500 mr-1">Windows:</span>
               <span className="font-mono font-bold text-sky-800">
-                {Array.isArray(associatedWindows) ? associatedWindows.length : 2} Window(s)
+                {Array.isArray(associatedWindows) ? associatedWindows.length : 2}
               </span>
             </div>
           </div>
 
           {/* Finishes & Materials */}
-          <div className="text-xs bg-stone-50 p-2.5 rounded-xl border border-charcoal-100">
-            <span className="text-[10px] text-charcoal-500 uppercase font-semibold block mb-0.5">Finishes & Materials</span>
-            <p className="text-[11px] text-charcoal-700 leading-snug">{materialsList}</p>
-          </div>
-
-          {/* Saved User Notes if present */}
-          {savedNotes[currentRoom.element_id] && (
-            <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-lg text-emerald-900 text-[11px]">
-              <span className="font-semibold">Room Note:</span> {savedNotes[currentRoom.element_id]}
-            </div>
-          )}
-
-          {/* Add / Edit Custom Note Input */}
-          <div className="flex items-center space-x-1.5 pt-1">
-            <input
-              type="text"
-              placeholder="Add room note / tag..."
-              value={customRoomNote}
-              onChange={(e) => setCustomRoomNote(e.target.value)}
-              className="flex-1 bg-stone-50 border border-charcoal-200 rounded-lg px-2 py-1 text-[11px]"
-            />
-            <button
-              onClick={() => handleSaveRoomNote(currentRoom.element_id)}
-              disabled={!customRoomNote.trim()}
-              className="bg-charcoal-900 hover:bg-charcoal-800 disabled:opacity-40 text-white text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-            >
-              Save
-            </button>
+          <div className="text-xs bg-stone-50 p-2 rounded-xl border border-charcoal-100">
+            <span className="text-[10px] text-charcoal-500 uppercase font-semibold block mb-0.5">Materials</span>
+            <p className="text-[10px] text-charcoal-700 leading-tight line-clamp-2">{materialsList}</p>
           </div>
 
           {/* Actions */}
-          <div className="flex items-center space-x-2 pt-1">
+          <div className="flex items-center space-x-2 pt-0.5">
             <button
               onClick={() => focusOnRoom(currentRoom)}
               className="flex-1 bg-stone-100 hover:bg-stone-200 text-charcoal-800 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1 transition-colors"
             >
               <Maximize2 className="w-3.5 h-3.5" />
-              <span>Focus Room</span>
+              <span>Focus</span>
             </button>
             <button
               onClick={() => enterRoomWalkthrough(currentRoom)}
@@ -1610,85 +2248,66 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
       )}
 
       {/* Notice if uploaded model lacks explicit IfcSpace elements */}
-      {viewerMode === 'interior' && availableRooms.length === 0 && (
-        <div className="absolute top-32 left-3 z-20 bg-white/95 backdrop-blur-md rounded-2xl border border-amber-200 shadow-xl p-3.5 max-w-xs text-xs pointer-events-auto space-y-2">
-          <div className="flex items-center space-x-2 text-amber-900 font-semibold">
-            <Home className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>Interior Geometry Available</span>
+      {viewerMode === 'interior' && !isWalkthrough && availableRooms.length === 0 && !dismissedNoRoomsNotice && (
+        <div className="absolute top-28 left-3 z-20 bg-white/95 backdrop-blur-md rounded-xl border border-amber-200 shadow-md p-3 max-w-xs text-xs pointer-events-auto space-y-1.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-1.5 text-amber-900 font-semibold">
+              <Home className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              <span>Interior Geometry</span>
+            </div>
+            <button
+              onClick={() => setDismissedNoRoomsNotice(true)}
+              className="text-stone-400 hover:text-stone-700 p-0.5 rounded"
+              title="Dismiss notice"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
-          <p className="text-[11px] text-charcoal-600 leading-relaxed">
+          <p className="text-[11px] text-charcoal-600 leading-snug">
             This model contains physical interior walls, slabs, doors, and windows, but no explicit <code className="font-mono text-amber-800">IfcSpace</code> boundary definitions. Use the cutaway and walkthrough controls to inspect the interior structure.
           </p>
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* FIRST-PERSON WALKTHROUGH HUD & CONTROLS */}
+      {/* FIRST-PERSON WALKTHROUGH OVERLAY: MINIMAL & UNOBTRUSIVE */}
       {/* ===================================================================== */}
-      {isWalkthrough && (
-        <div className="absolute bottom-12 right-4 z-20 bg-charcoal-950/85 backdrop-blur-md text-white p-3 rounded-2xl border border-charcoal-700 shadow-2xl flex flex-col items-center space-y-2 pointer-events-auto animate-in fade-in">
-          <div className="text-[10px] uppercase font-bold tracking-wider text-emerald-400 flex items-center space-x-1">
-            <Footprints className="w-3.5 h-3.5" />
-            <span>Walkthrough Mode • Eye Level 1.65m</span>
-          </div>
 
-          <div className="text-[10px] text-stone-300 text-center font-mono">
-            W / A / S / D or Arrow Keys to Walk
-          </div>
-
-          {/* D-Pad Buttons */}
-          <div className="grid grid-cols-3 gap-1 pt-1">
-            <div />
-            <button
-              onClick={() => walkStep('forward')}
-              className="p-2 bg-charcoal-800 hover:bg-charcoal-700 active:bg-emerald-700 rounded-lg text-xs font-bold text-center"
-              title="Step Forward"
-            >
-              ▲
-            </button>
-            <div />
-            <button
-              onClick={() => walkStep('left')}
-              className="p-2 bg-charcoal-800 hover:bg-charcoal-700 active:bg-emerald-700 rounded-lg text-xs font-bold text-center"
-              title="Strafe Left"
-            >
-              ◀
-            </button>
-            <button
-              onClick={() => walkStep('backward')}
-              className="p-2 bg-charcoal-800 hover:bg-charcoal-700 active:bg-emerald-700 rounded-lg text-xs font-bold text-center"
-              title="Step Backward"
-            >
-              ▼
-            </button>
-            <button
-              onClick={() => walkStep('right')}
-              className="p-2 bg-charcoal-800 hover:bg-charcoal-700 active:bg-emerald-700 rounded-lg text-xs font-bold text-center"
-              title="Strafe Right"
-            >
-              ▶
-            </button>
-          </div>
-
-          <button
-            onClick={exitWalkthrough}
-            className="w-full bg-rose-600 hover:bg-rose-700 text-white font-semibold py-1 rounded-lg text-[11px] transition-colors mt-1"
-          >
-            Exit Walk
-          </button>
-        </div>
-      )}
-
-      {/* Prominent Floating Exit Walkthrough Banner (Top Right) */}
+      {/* Primary Floating Exit Walkthrough Button (Top Right) */}
       {isWalkthrough && (
         <div className="absolute top-4 right-4 z-50 pointer-events-auto animate-in fade-in">
           <button
             onClick={exitWalkthrough}
-            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-bold text-xs rounded-xl shadow-2xl flex items-center space-x-2 border border-rose-500 transition-all cursor-pointer"
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-bold text-xs rounded-xl shadow-2xl flex items-center space-x-2 border border-rose-500 transition-all cursor-pointer hover:scale-105"
           >
             <X className="w-4 h-4" />
             <span>Exit Walkthrough (Esc)</span>
           </button>
+        </div>
+      )}
+
+      {/* Subtle Bottom Navigation Hint Pill (Centered, non-blocking) */}
+      {isWalkthrough && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 bg-charcoal-950/85 backdrop-blur-md text-white px-4 py-2 rounded-full border border-charcoal-700/80 shadow-2xl flex items-center space-x-3 pointer-events-none animate-in fade-in slide-in-from-bottom-2">
+          <div className="flex items-center space-x-1.5 text-emerald-400 font-semibold text-xs">
+            <Footprints className="w-3.5 h-3.5" />
+            <span>Walkthrough</span>
+          </div>
+          <span className="text-charcoal-600">•</span>
+          <div className="text-[11px] text-stone-300 font-mono flex items-center space-x-1">
+            <span className="font-semibold text-white">W / A / S / D</span>
+            <span>or</span>
+            <span className="font-semibold text-white">Arrows</span>
+            <span>to move</span>
+          </div>
+          <span className="text-charcoal-600">•</span>
+          <div className="text-[11px] text-stone-300">
+            Drag mouse to look
+          </div>
+          <span className="text-charcoal-600">•</span>
+          <div className="text-[11px] text-amber-300 font-medium">
+            <kbd className="px-1.5 py-0.5 bg-charcoal-800 border border-charcoal-600 rounded text-[10px] text-white font-mono">Esc</kbd> to exit
+          </div>
         </div>
       )}
 
@@ -1706,6 +2325,79 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
             >
               <X className="w-4 h-4" />
             </button>
+          </div>
+
+          {/* Interior Cutaway & Visibility Controls (Priority 5) */}
+          <div className="space-y-2.5 pb-3 border-b border-charcoal-100">
+            <span className="text-[10px] text-charcoal-500 uppercase font-bold tracking-wider block">
+              Interior Cutaway & Wall Visibility
+            </span>
+
+            {/* Ceiling Cutaway Toggle */}
+            <label className="flex items-center justify-between p-2 bg-stone-50 rounded-xl border border-charcoal-100 cursor-pointer hover:bg-stone-100 transition-colors">
+              <div className="flex items-center space-x-2">
+                <Home className="w-3.5 h-3.5 text-stone-600" />
+                <div>
+                  <span className="text-[11px] font-semibold text-charcoal-800 block">Cutaway Ceiling / Roof</span>
+                  <span className="text-[10px] text-charcoal-500">Hide upper slabs to view dollhouse interior</span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={!showCeiling}
+                onChange={(e) => setShowCeiling(!e.target.checked)}
+                className="rounded text-charcoal-900 focus:ring-charcoal-900 h-3.5 w-3.5"
+              />
+            </label>
+
+            {/* Wall Transparency Control */}
+            <div className="space-y-1">
+              <span className="text-[10px] text-charcoal-500 uppercase font-semibold block">Wall Opacity:</span>
+              <div className="grid grid-cols-4 gap-1">
+                {(['translucent', 'cutaway', 'solid', 'hidden'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setWallTransparency(mode)}
+                    className={`px-2 py-1 rounded-lg capitalize font-semibold text-[10px] text-center transition-all ${
+                      wallTransparency === mode
+                        ? 'bg-charcoal-900 text-white shadow-2xs'
+                        : 'bg-stone-50 border border-charcoal-200 text-charcoal-700 hover:bg-stone-100'
+                    }`}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Hide Specific Elements */}
+            <div className="space-y-1">
+              <span className="text-[10px] text-charcoal-500 uppercase font-semibold block">Hide Categories:</span>
+              <div className="flex flex-wrap gap-1">
+                {[
+                  { type: 'IfcWall', label: 'Walls' },
+                  { type: 'IfcSlab', label: 'Slabs' },
+                  { type: 'IfcDoor', label: 'Doors' },
+                  { type: 'IfcWindow', label: 'Windows' },
+                  { type: 'IfcSpace', label: 'Rooms' },
+                ].map(({ type, label: catLabel }) => {
+                  const isHidden = hiddenCategories.includes(type);
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => toggleCategory(type)}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-semibold border transition-all ${
+                        isHidden
+                          ? 'bg-rose-100 text-rose-800 border-rose-300 line-through'
+                          : 'bg-stone-50 text-charcoal-700 border-charcoal-200 hover:bg-stone-100'
+                      }`}
+                    >
+                      {catLabel}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           {/* Visual Presets */}
@@ -1937,34 +2629,47 @@ export const BuildingViewer: React.FC<BuildingViewerProps> = ({
       />
 
       {/* Bottom Architectural Scale & Mode Guidance Badge */}
-      <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between text-[11px] text-charcoal-500 pointer-events-none px-2">
-        <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 rounded border border-charcoal-200/80 pointer-events-auto">
-          {isDigitalTwinMode && importedModel?.bounding_box ? (
-            <span className="flex items-center space-x-2">
-              <span className={`inline-block w-2 h-2 rounded-full ${viewerMode === 'interior' ? 'bg-emerald-600' : viewerMode === 'skeleton' ? 'bg-amber-500' : 'bg-blue-600'}`}></span>
-              <strong className="text-charcoal-700">Mode: {viewerMode === 'skeleton' ? 'Skeleton View (Wireframe)' : viewerMode === 'interior' ? 'Interior View' : 'Exterior View'}</strong>
-              <span className="hidden sm:inline">|</span>
-              <span className="hidden sm:inline">
-                {importedModel.bounding_box.width}m (W) × {importedModel.bounding_box.height}m (D) × {importedModel.bounding_box.depth}m (H) • {importedModel.storeys.length} Storeys
+      {!isWalkthrough && (
+        <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between text-[11px] text-charcoal-500 pointer-events-none px-2">
+          <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 rounded border border-charcoal-200/80 pointer-events-auto">
+            {isDigitalTwinMode && importedModel?.bounding_box ? (
+              <span className="flex items-center space-x-2">
+                <span className={`inline-block w-2 h-2 rounded-full ${
+                  viewerMode === 'interior' ? 'bg-emerald-600' :
+                  viewerMode === 'floor_by_floor' ? 'bg-indigo-600' :
+                  viewerMode === 'skeleton' ? 'bg-amber-500' : 'bg-blue-600'
+                }`}></span>
+                <strong className="text-charcoal-700">Mode: {
+                  viewerMode === 'skeleton' ? 'Skeleton View (Wireframe)' :
+                  viewerMode === 'interior' ? 'Furnished Interior (Isometric Dollhouse)' :
+                  viewerMode === 'floor_by_floor' ? 'Floor-by-Floor (Exploded Stack)' :
+                  'Exterior View'
+                }</strong>
+                <span className="hidden sm:inline">|</span>
+                <span className="hidden sm:inline">
+                  {importedModel.bounding_box.width}m (W) × {importedModel.bounding_box.height}m (D) × {importedModel.bounding_box.depth}m (H) • {importedModel.storeys.length} Storeys
+                </span>
               </span>
-            </span>
-          ) : (
-            <span className="flex items-center space-x-2">
-              <span className="inline-block w-2 h-2 rounded-full bg-blue-500"></span>
-              <strong className="text-charcoal-700">Mode: {viewerMode.toUpperCase()}</strong>
-              <span>| {params.width_m}m × {params.length_m}m × {(params.floors * params.floor_height_m).toFixed(1)}m</span>
-            </span>
-          )}
-        </div>
+            ) : (
+              <span className="flex items-center space-x-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-blue-500"></span>
+                <strong className="text-charcoal-700">Mode: {viewerMode.toUpperCase()}</strong>
+                <span>| {params.width_m}m × {params.length_m}m × {(params.floors * params.floor_height_m).toFixed(1)}m</span>
+              </span>
+            )}
+          </div>
 
-        <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 rounded text-[10px] pointer-events-auto hidden sm:flex items-center space-x-1.5 border border-charcoal-200/80">
-          <span className="font-semibold text-charcoal-700">
-            {viewerMode === 'interior' ? 'Interior Cutaway & Navigation Active' : viewerMode === 'skeleton' ? 'Structural Skeleton View' : 'Solid Architectural Exterior'}
-          </span>
-          <span className="text-charcoal-400">|</span>
-          <span>Click any element or room to inspect</span>
+          <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 rounded text-[10px] pointer-events-auto hidden sm:flex items-center space-x-1.5 border border-charcoal-200/80">
+            <span className="font-semibold text-charcoal-700">
+              {viewerMode === 'interior' ? 'Furnished Dollhouse & Interior Navigation Active' :
+               viewerMode === 'floor_by_floor' ? 'Storey Stack Isolation & Exploded View Active' :
+               viewerMode === 'skeleton' ? 'Structural Skeleton View' : 'Solid Architectural Exterior'}
+            </span>
+            <span className="text-charcoal-400">|</span>
+            <span>Click any element, room or furniture to inspect & edit</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

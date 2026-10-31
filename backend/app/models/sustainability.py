@@ -25,6 +25,9 @@ class ComprehensiveRecommendation(BaseModel):
     time_horizon: str = Field(..., description="'immediate', 'near_term_2026', 'mid_term_2035', or 'long_term_2050'")
     confidence: str = Field(..., description="'high', 'medium', or 'insufficient_data'")
     data_sources: List[str]
+    relevant_building_feature: Optional[str] = Field(default=None, description="Specific architectural, geometric, or structural element addressed")
+    relevant_location_feature: Optional[str] = Field(default=None, description="Specific geospatial, environmental, soil, or climate feature driving the recommendation")
+    contributing_datasets: List[str] = Field(default_factory=list, description="List of the 10 target geospatial datasets that contributed data")
     assumptions: List[str]
     missing_information: List[str]
     validation_requirements: str
@@ -37,3 +40,5 @@ class SustainabilityAuditReport(BaseModel):
     summary_counts: Dict[str, int]
     recommendations: List[ComprehensiveRecommendation]
     insufficient_data_warnings: List[str]
+    dataset_statuses: Dict[str, str] = Field(default_factory=dict, description="Status of the 10 target geospatial datasets")
+    location_profile: Optional[Any] = Field(default=None, description="UnifiedLocationProfile instance if available")

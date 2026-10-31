@@ -440,6 +440,13 @@ class FloorplanTo3dService:
         # Store in ModelStore
         ModelStore.save_model(model_detail, warnings=floorplan.warnings)
 
+        # Pre-generate deterministic 3D furniture layout for the newly synthesized twin
+        try:
+            from app.services.interior_furnishing_service import InteriorFurnishingService
+            InteriorFurnishingService.generate_furnishing_plan_for_model(model_detail)
+        except Exception:
+            pass
+
         summary = ImportSummaryResponse(
             model_id=model_detail.model_id,
             source_filename=model_detail.source_filename,

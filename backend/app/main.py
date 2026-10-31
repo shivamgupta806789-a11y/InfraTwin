@@ -12,6 +12,9 @@ from app.api.city_routes import router as city_router
 from app.api.sustainability_routes import router as sustainability_router
 from app.api.scenario_routes import router as scenario_router
 from app.api.ml_routes import router as ml_router
+from app.api.rainwater_routes import router as rainwater_router
+from app.api.geospatial_routes import router as geospatial_router
+from app.api.furniture_routes import router as furniture_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -66,3 +69,6 @@ app.include_router(city_router)
 app.include_router(sustainability_router)
 app.include_router(scenario_router)
 app.include_router(ml_router)
+app.include_router(rainwater_router)
+app.include_router(geospatial_router)
+app.include_router(furniture_router)

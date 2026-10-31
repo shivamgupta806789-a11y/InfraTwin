@@ -189,7 +189,7 @@ export const FloorplanUploadModal: React.FC<FloorplanUploadModalProps> = ({
                 handleProcessFile(e.target.files[0]);
               }
             }}
-            accept=".png,.jpg,.jpeg,.pdf,.webp"
+            accept=".png,.jpg,.jpeg,.pdf,.webp,.dxf"
             className="hidden"
           />
 
@@ -202,7 +202,7 @@ export const FloorplanUploadModal: React.FC<FloorplanUploadModalProps> = ({
                 Click to upload or drag & drop architectural drawing
               </p>
               <p className="text-[11px] text-charcoal-500 font-mono">
-                PDF, PNG, JPG, or JPEG (Max 25MB)
+                PDF, DXF, PNG, JPG, or JPEG (Max 25MB)
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">

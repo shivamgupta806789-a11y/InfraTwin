@@ -12,12 +12,13 @@ import {
   MapPin,
   Calendar,
   Compass,
+  Droplets,
 } from 'lucide-react';
 import { CityModel } from '../types/city';
 import { BuildingModelDetail } from '../types/digital_twin';
 
 interface HomePageProps {
-  onNavigate: (view: 'home' | 'city_twin' | 'digital_twin' | 'parametric' | 'scenarios' | 'geotechnical' | 'ml_optimizer') => void;
+  onNavigate: (view: 'home' | 'city_twin' | 'digital_twin' | 'parametric' | 'geolocation_climate' | 'scenarios') => void;
   onOpenIfcModal: () => void;
   onOpenFloorplanModal: () => void;
   activeModel?: BuildingModelDetail | null;
@@ -347,9 +348,18 @@ export const HomePage: React.FC<HomePageProps> = ({
               </p>
             </div>
 
+            {/* Rainwater 3D shortcut button */}
+            <button
+              onClick={() => onNavigate('geolocation_climate')}
+              className="w-full bg-sky-50 hover:bg-sky-100 text-sky-900 font-semibold text-xs py-2 rounded-lg transition-colors border border-sky-200 flex items-center justify-center space-x-1.5 cursor-pointer shadow-2xs"
+            >
+              <Droplets className="w-3.5 h-3.5 text-sky-600" />
+              <span>Launch 3D Rainwater & Stormwater Engine</span>
+            </button>
+
             {/* Subsurface shortcut button */}
             <button
-              onClick={() => onNavigate('geotechnical')}
+              onClick={() => onNavigate('geolocation_climate')}
               className="w-full bg-stone-100 hover:bg-stone-200 text-charcoal-800 font-semibold text-xs py-2 rounded-lg transition-colors border border-charcoal-200 flex items-center justify-center space-x-1.5"
             >
               <Compass className="w-3.5 h-3.5 text-blue-600" />

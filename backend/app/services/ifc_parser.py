@@ -1,4 +1,6 @@
 import os
+import re
+import tempfile
 import math
 import uuid
 import datetime
@@ -50,12 +52,73 @@ class IfcParserService:
         warnings: List[str] = []
         missing_info: List[str] = []
 
+        # 0. Pre-inspect IFC header for FILE_SCHEMA and apply release-candidate compatibility
+        raw_schema = "IFC2X3"
         try:
-            ifc_file = ifcopenshell.open(filepath)
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f_head:
+                header_chunk = f_head.read(8192)
+                schema_match = re.search(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'\s*\)\s*\);", header_chunk, re.IGNORECASE)
+                if schema_match:
+                    raw_schema = schema_match.group(1).strip()
         except Exception as e:
-            raise ValueError(f"Failed to parse IFC file structure: {str(e)}")
+            warnings.append(f"IFC header pre-scan notice: {str(e)}")
 
-        schema_version = ifc_file.schema
+        # Supported compiled schemas in installed IfcOpenShell: IFC2X3, IFC4, IFC4X3_ADD2
+        SCHEMA_COMPATIBILITY_MAP = {
+            "IFC4X3_RC1": "IFC4X3_ADD2",
+            "IFC4X3_RC2": "IFC4X3_ADD2",
+            "IFC4X3_RC3": "IFC4X3_ADD2",
+            "IFC4X3_RC4": "IFC4X3_ADD2",
+            "IFC4X3_ADD1": "IFC4X3_ADD2",
+            "IFC4X3": "IFC4X3_ADD2",
+        }
+
+        working_filepath = filepath
+        temp_mapped_file = None
+
+        if raw_schema.upper() in SCHEMA_COMPATIBILITY_MAP:
+            target_schema = SCHEMA_COMPATIBILITY_MAP[raw_schema.upper()]
+            try:
+                with open(filepath, "r", encoding="utf-8", errors="ignore") as f_in:
+                    orig_content = f_in.read()
+                mapped_content = re.sub(
+                    rf"FILE_SCHEMA\s*\(\s*\(\s*'{re.escape(raw_schema)}'\s*\)\s*\);",
+                    f"FILE_SCHEMA(('{target_schema}'));",
+                    orig_content,
+                    count=1,
+                    flags=re.IGNORECASE
+                )
+                t_file = tempfile.NamedTemporaryFile("w", suffix=".ifc", delete=False, encoding="utf-8")
+                t_file.write(mapped_content)
+                t_file.flush()
+                t_file.close()
+                working_filepath = t_file.name
+                temp_mapped_file = working_filepath
+                warnings.append(
+                    f"IFC schema release candidate '{raw_schema}' safely mapped to compiled standard '{target_schema}' "
+                    f"for native IfcOpenShell v{ifcopenshell.__version__} processing. Original schema '{raw_schema}' is preserved in project metadata."
+                )
+            except Exception as map_err:
+                warnings.append(f"Notice: Automatic schema adaptation skipped: {str(map_err)}")
+
+        try:
+            ifc_file = ifcopenshell.open(working_filepath)
+        except Exception as e:
+            err_str = str(e)
+            if "Unsupported schema" in err_str:
+                raise ValueError(
+                    f"Failed to parse IFC file structure: Unsupported schema: {raw_schema}. "
+                    f"Installed IfcOpenShell v{ifcopenshell.__version__} natively supports IFC2X3, IFC4, and IFC4X3_ADD2."
+                )
+            raise ValueError(f"Failed to parse IFC file structure: {err_str}")
+        finally:
+            if temp_mapped_file and os.path.exists(temp_mapped_file):
+                try:
+                    os.remove(temp_mapped_file)
+                except Exception:
+                    pass
+
+        schema_version = raw_schema  # Preserve the authentic uploaded schema
 
         # 1. Inspect Project, Site, Building
         project_name = None
@@ -72,6 +135,9 @@ class IfcParserService:
         buildings = ifc_file.by_type("IfcBuilding")
         if buildings:
             building_name = buildings[0].Name or buildings[0].GlobalId
+
+        # 1b. Extract Georeferencing & Site Placement
+        georeferencing = cls._extract_georeferencing(ifc_file, sites)
 
         # 2. Extract Units
         length_unit = "METRE"
@@ -537,6 +603,7 @@ class IfcParserService:
             missing_data=missing_info,
             structural_audit=structural_audit,
             bounding_box=model_bbox,
+            georeferencing=georeferencing,
             provenance_metadata={
                 "parser": "IfcOpenShell",
                 "version": ifcopenshell.__version__,
@@ -548,3 +615,99 @@ class IfcParserService:
         )
 
         return (model, warnings, missing_info)
+
+    @classmethod
+    def _extract_georeferencing(cls, ifc_file, sites) -> Dict[str, Any]:
+        """
+        Extracts native IFC georeferencing, true north, CRS, and projected map conversion
+        according to buildingSMART IFC4/IFC4X3 georeferencing standards.
+        """
+        geo_info: Dict[str, Any] = {
+            "has_ifc_georeferencing": False,
+            "crs_name": None,
+            "projected_crs": None,
+            "map_conversion": None,
+            "ref_latitude": None,
+            "ref_longitude": None,
+            "ref_elevation_m": None,
+            "true_north_azimuth_deg": None,
+            "provenance": "unreferenced_in_ifc",
+        }
+
+        # 1. Site Coordinates (RefLatitude, RefLongitude, RefElevation)
+        if sites:
+            site = sites[0]
+            lat_tuple = getattr(site, "RefLatitude", None)
+            lon_tuple = getattr(site, "RefLongitude", None)
+            elev = getattr(site, "RefElevation", None)
+
+            def dms_to_decimal(dms):
+                if not dms or len(dms) < 3:
+                    return None
+                try:
+                    deg, minute, sec = float(dms[0]), float(dms[1]), float(dms[2])
+                    micro = float(dms[3]) if len(dms) > 3 else 0.0
+                    sign = -1.0 if deg < 0 else 1.0
+                    return round(sign * (abs(deg) + minute / 60.0 + (sec + micro / 1e6) / 3600.0), 6)
+                except Exception:
+                    return None
+
+            lat = dms_to_decimal(lat_tuple)
+            lon = dms_to_decimal(lon_tuple)
+
+            if lat is not None and lon is not None:
+                geo_info["has_ifc_georeferencing"] = True
+                geo_info["ref_latitude"] = lat
+                geo_info["ref_longitude"] = lon
+                geo_info["provenance"] = "ifc_site_attributes"
+
+            if elev is not None:
+                try:
+                    geo_info["ref_elevation_m"] = round(float(elev), 2)
+                except Exception:
+                    pass
+
+        # 2. IFC4 / IFC4X3 Map Conversion (IfcMapConversion, IfcProjectedCRS)
+        try:
+            map_convs = ifc_file.by_type("IfcMapConversion")
+            if map_convs:
+                mc = map_convs[0]
+                geo_info["has_ifc_georeferencing"] = True
+                geo_info["map_conversion"] = {
+                    "eastings": getattr(mc, "Eastings", None),
+                    "northings": getattr(mc, "Northings", None),
+                    "orthogonal_height": getattr(mc, "OrthogonalHeight", None),
+                    "x_axis_abscissa": getattr(mc, "XAxisAbscissa", None),
+                    "x_axis_ordinate": getattr(mc, "XAxisOrdinate", None),
+                    "scale": getattr(mc, "Scale", 1.0),
+                }
+                geo_info["provenance"] = "ifc_map_conversion"
+
+            proj_crss = ifc_file.by_type("IfcProjectedCRS")
+            if proj_crss:
+                pc = proj_crss[0]
+                crs_name = getattr(pc, "Name", None)
+                geo_info["crs_name"] = str(crs_name) if crs_name else None
+                geo_info["projected_crs"] = {
+                    "name": str(crs_name) if crs_name else None,
+                    "description": getattr(pc, "Description", None),
+                    "geodetic_datum": getattr(pc, "GeodeticDatum", None),
+                    "vertical_datum": getattr(pc, "VerticalDatum", None),
+                }
+        except Exception:
+            pass
+
+        # 3. True North from GeometricRepresentationContext
+        try:
+            geom_contexts = ifc_file.by_type("IfcGeometricRepresentationContext")
+            for gc in geom_contexts:
+                tn = getattr(gc, "TrueNorth", None)
+                if tn and hasattr(tn, "DirectionRatios") and len(tn.DirectionRatios) >= 2:
+                    dx, dy = float(tn.DirectionRatios[0]), float(tn.DirectionRatios[1])
+                    azimuth = (math.atan2(dx, dy) * 180.0 / math.pi) % 360.0
+                    geo_info["true_north_azimuth_deg"] = round(azimuth, 2)
+                    break
+        except Exception:
+            pass
+
+        return geo_info

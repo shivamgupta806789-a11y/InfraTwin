@@ -26,6 +26,11 @@ class CityService:
     _cached_city: Optional[CityModel] = None
 
     @classmethod
+    def reset_default_city(cls) -> CityModel:
+        cls._cached_city = None
+        return cls.get_default_city_model()
+
+    @classmethod
     def get_default_city_model(cls) -> CityModel:
         if cls._cached_city is not None:
             return cls._cached_city

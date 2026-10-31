@@ -12,12 +12,19 @@ import {
   ArrowRight,
   Zap,
   X,
+  Upload,
+  RefreshCw,
+  FileCheck,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
+import { importCityFileApi, restoreSampleCityApi } from '../lib/api';
 
 interface CityViewerProps {
   cityModel: CityModel | null;
   isLoading: boolean;
   onSelectBuildingForBim?: (buildingId: string) => void;
+  onCityModelUpdated?: (updatedModel: CityModel) => void;
   className?: string;
 }
 
@@ -33,6 +40,7 @@ export const CityViewer: React.FC<CityViewerProps> = ({
   cityModel,
   isLoading,
   onSelectBuildingForBim,
+  onCityModelUpdated,
   className = '',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -52,6 +60,16 @@ export const CityViewer: React.FC<CityViewerProps> = ({
   const [selectedTypology, setSelectedTypology] = useState<string>('all');
   const [showInfrastructure, setShowInfrastructure] = useState<boolean>(true);
   const [isRotating, setIsRotating] = useState<boolean>(false);
+
+  // Import City / District Modal State
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importDistrictName, setImportDistrictName] = useState<string>('');
+  const [importDistrictType, setImportDistrictType] = useState<string>('Commercial Center');
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [isRestoring, setIsRestoring] = useState<boolean>(false);
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -327,6 +345,49 @@ export const CityViewer: React.FC<CityViewerProps> = ({
     controlsRef.current.update();
   };
 
+  const handleImportCityFile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importFile) {
+      setImportError('Please select a GIS or CAD file to import.');
+      return;
+    }
+    setIsUploading(true);
+    setImportError(null);
+    setImportSuccess(null);
+    try {
+      const updated = await importCityFileApi(importFile, importDistrictName, importDistrictType);
+      setImportSuccess(`Successfully imported "${updated.name}"! Added ${updated.total_buildings} buildings.`);
+      if (onCityModelUpdated) {
+        onCityModelUpdated(updated);
+      }
+      setTimeout(() => {
+        setIsImportModalOpen(false);
+        setImportFile(null);
+        setImportSuccess(null);
+      }, 1500);
+    } catch (err: any) {
+      setImportError(err.message || 'Failed to import city/district file.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleRestoreSample = async () => {
+    setIsRestoring(true);
+    try {
+      const restored = await restoreSampleCityApi();
+      if (onCityModelUpdated) {
+        onCityModelUpdated(restored);
+      }
+      setSelectedDistrictId(null);
+      setSelectedBuilding(null);
+    } catch (err: any) {
+      console.error('Failed to restore demo city:', err);
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
   if (isLoading || !cityModel) {
     return (
       <div className={`bg-white rounded-2xl border border-charcoal-200 p-8 flex flex-col items-center justify-center space-y-3 min-h-[480px] ${className}`}>
@@ -392,6 +453,26 @@ export const CityViewer: React.FC<CityViewerProps> = ({
               className="pl-8 pr-3 py-1 bg-white/95 backdrop-blur-md border border-charcoal-200 rounded-xl text-xs text-charcoal-800 placeholder:text-charcoal-400 focus:outline-none shadow-xs w-48 sm:w-56"
             />
           </div>
+
+          {/* Action: Import City / District Button */}
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="flex items-center space-x-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-xs transition-colors shrink-0"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>IMPORT CITY / DISTRICT</span>
+          </button>
+
+          {/* Action: Restore Demo City Button */}
+          <button
+            onClick={handleRestoreSample}
+            disabled={isRestoring}
+            title="Restore default TechCity Innovation District dataset"
+            className="flex items-center space-x-1 bg-white/95 backdrop-blur-md hover:bg-stone-100 text-charcoal-700 border border-charcoal-200 text-xs font-semibold px-2.5 py-1.5 rounded-xl shadow-xs transition-colors shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-stone-500 ${isRestoring ? 'animate-spin text-emerald-600' : ''}`} />
+            <span className="hidden sm:inline">Reset Demo</span>
+          </button>
 
           <div className="flex items-center space-x-1 bg-white/95 backdrop-blur-md p-1 rounded-xl border border-charcoal-200 shadow-xs">
             <button
@@ -505,6 +586,171 @@ export const CityViewer: React.FC<CityViewerProps> = ({
           <span>Click any building to view metrics or drill into detailed BIM geometry</span>
         </div>
       </div>
+
+      {/* Import City / District Modal */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-charcoal-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl border border-charcoal-200 shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-charcoal-200 flex items-center justify-between bg-stone-50">
+              <div className="flex items-center space-x-2">
+                <div className="p-2 bg-emerald-100 text-emerald-800 rounded-lg">
+                  <Upload className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-charcoal-900">Import City / District Spatial Model</h3>
+                  <p className="text-[11px] text-charcoal-500">Multi-format ingestion without data fabrication</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setImportError(null);
+                  setImportSuccess(null);
+                }}
+                className="p-1.5 text-charcoal-400 hover:text-charcoal-700 hover:bg-stone-200 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleImportCityFile} className="p-5 space-y-4 overflow-y-auto">
+              {/* Supported Formats Strip */}
+              <div>
+                <label className="block text-[11px] font-bold text-charcoal-700 uppercase tracking-wider mb-1.5">
+                  Supported Multi-Format Formats
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-[11px]">
+                  <span className="p-1.5 bg-stone-50 border border-charcoal-200 rounded-md font-mono text-center text-charcoal-700">
+                    .geojson <span className="text-[9px] text-charcoal-500 block">GeoJSON</span>
+                  </span>
+                  <span className="p-1.5 bg-stone-50 border border-charcoal-200 rounded-md font-mono text-center text-charcoal-700">
+                    .cityjson <span className="text-[9px] text-charcoal-500 block">CityJSON 3D</span>
+                  </span>
+                  <span className="p-1.5 bg-stone-50 border border-charcoal-200 rounded-md font-mono text-center text-charcoal-700">
+                    .zip <span className="text-[9px] text-charcoal-500 block">ESRI Shapefile</span>
+                  </span>
+                  <span className="p-1.5 bg-stone-50 border border-charcoal-200 rounded-md font-mono text-center text-charcoal-700">
+                    .gpkg <span className="text-[9px] text-charcoal-500 block">OGC GeoPackage</span>
+                  </span>
+                  <span className="p-1.5 bg-stone-50 border border-charcoal-200 rounded-md font-mono text-center text-charcoal-700">
+                    .dxf <span className="text-[9px] text-charcoal-500 block">AutoCAD DXF</span>
+                  </span>
+                  <span className="p-1.5 bg-stone-50 border border-charcoal-200 rounded-md font-mono text-center text-charcoal-700">
+                    .json <span className="text-[9px] text-charcoal-500 block">Generic GIS JSON</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* File Drop Area */}
+              <div>
+                <label className="block text-xs font-bold text-charcoal-800 mb-1">Select GIS or CAD File</label>
+                <div className="border-2 border-dashed border-charcoal-300 rounded-xl p-4 text-center hover:bg-stone-50 transition-colors cursor-pointer relative">
+                  <input
+                    type="file"
+                    accept=".geojson,.json,.cityjson,.zip,.gpkg,.dxf"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        setImportFile(e.target.files[0]);
+                        if (!importDistrictName) {
+                          const baseName = e.target.files[0].name.replace(/\.[^/.]+$/, '');
+                          setImportDistrictName(baseName.replace(/[-_]/g, ' '));
+                        }
+                      }
+                    }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  <div className="flex flex-col items-center space-y-1.5">
+                    <FileCheck className="w-6 h-6 text-emerald-700" />
+                    {importFile ? (
+                      <div>
+                        <p className="text-xs font-bold text-emerald-800">{importFile.name}</p>
+                        <p className="text-[11px] text-charcoal-500 font-mono">
+                          {(importFile.size / 1024).toFixed(1)} KB
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-xs font-semibold text-charcoal-700">Click to upload or drag & drop</p>
+                        <p className="text-[11px] text-charcoal-500">GeoJSON, CityJSON, Shapefile (.zip), GeoPackage (.gpkg), or DXF</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* District Metadata Inputs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-charcoal-700 mb-1">District Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Waterfront Innovation Corridor"
+                    value={importDistrictName}
+                    onChange={(e) => setImportDistrictName(e.target.value)}
+                    className="w-full bg-stone-50 border border-charcoal-200 rounded-lg px-3 py-1.5 text-xs text-charcoal-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-charcoal-700 mb-1">Typology / Zone</label>
+                  <select
+                    value={importDistrictType}
+                    onChange={(e) => setImportDistrictType(e.target.value)}
+                    className="w-full bg-stone-50 border border-charcoal-200 rounded-lg px-3 py-1.5 text-xs text-charcoal-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  >
+                    <option value="Commercial Center">Commercial Center</option>
+                    <option value="Innovation Hub">Innovation Hub</option>
+                    <option value="Transit-Oriented Zone">Transit-Oriented Zone</option>
+                    <option value="Residential Quarter">Residential Quarter</option>
+                    <option value="Mixed-Use Campus">Mixed-Use Campus</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Data Integrity Notice */}
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-[11px] text-amber-900 flex items-start space-x-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Engineering Data Integrity:</strong> Ground footprints and coordinate frames are parsed directly from GIS/CAD geometries. Heights and storeys are only extracted if verified in file attributes (e.g. <code>height</code>, <code>building:levels</code>). Unverified heights default to standard 2-storey envelope (7.0m) without fabricating simulation data.
+                </span>
+              </div>
+
+              {importError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{importError}</span>
+                </div>
+              )}
+
+              {importSuccess && (
+                <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{importSuccess}</span>
+                </div>
+              )}
+
+              {/* Footer Buttons */}
+              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-charcoal-100">
+                <button
+                  type="button"
+                  onClick={() => setIsImportModalOpen(false)}
+                  className="px-3 py-1.5 text-xs text-charcoal-600 hover:text-charcoal-900 hover:bg-stone-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!importFile || isUploading}
+                  className="px-4 py-1.5 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg shadow-xs transition-colors disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  {isUploading && <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  <span>{isUploading ? 'Ingesting Geometry...' : 'Import District'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
